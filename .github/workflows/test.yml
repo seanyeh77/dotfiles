@@ -21,13 +21,19 @@ jobs:
           - { name: ubuntu-24.04 arm64, os: ubuntu-24.04-arm }
           - { name: macos arm64,        os: macos-latest }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: install.sh
-        run: bash install.sh
+        run: bash install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
+        shell: bash -o pipefail {0}
         env:
           DOTFILES_DIR: ${{ github.workspace }}
       - name: verify
-        run: nvim --headless -c "luafile ci/verify.lua"
+        run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
+        shell: bash -o pipefail {0}
+      - name: report failure
+        if: failure()
+        run: bash ci/annotate.sh "$RUNNER_TEMP"
+        shell: bash
 
   # 其他 distro 用 container 跑（都以 root 執行，順便測沒有 sudo 的情況）
   distro:
@@ -58,14 +64,18 @@ jobs:
           elif command -v zypper  >/dev/null; then zypper --non-interactive install git tar gzip
           elif command -v apk     >/dev/null; then apk add git bash
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: install.sh
-        run: bash install.sh
-        shell: bash
+        run: bash install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
+        shell: bash -o pipefail {0}
         env:
           DOTFILES_DIR: ${{ github.workspace }}
       - name: verify
-        run: nvim --headless -c "luafile ci/verify.lua"
+        run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
+        shell: bash -o pipefail {0}
+      - name: report failure
+        if: failure()
+        run: bash ci/annotate.sh "$RUNNER_TEMP"
         shell: bash
 
   # 測真正給使用者用的那行指令（只在 main 跑，因為 raw 網址抓的是 main）
@@ -75,8 +85,13 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: curl | bash
-        run: bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh)
+        run: bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh) 2>&1 | tee "$RUNNER_TEMP/install.log"
+        shell: bash -o pipefail {0}
         env:
           DOTFILES_REPO: https://github.com/${{ github.repository }}
       - name: verify
-        run: nvim --headless -c "luafile $HOME/dotfiles/ci/verify.lua"
+        run: nvim --headless -c "luafile $HOME/dotfiles/ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
+        shell: bash -o pipefail {0}
+      - name: report failure
+        if: failure()
+        run: bash "$HOME/dotfiles/ci/annotate.sh" "$RUNNER_TEMP"

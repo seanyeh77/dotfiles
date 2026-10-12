@@ -85,6 +85,7 @@ pm_install() { # pm_install REQUIRED... -- OPTIONAL...
 }
 
 log "Installing system packages"
+CURL_PKG=curl; has curl && CURL_PKG=""
 case "$PM" in
   brew)
     if ! has brew; then
@@ -95,21 +96,21 @@ case "$PM" in
     pm_install git tmux ripgrep fd neovim node -- tree-sitter-cli ;;
   apt-get)
     sudo apt-get update || true
-    pm_install git curl wget unzip tar gzip xz-utils tmux ripgrep build-essential python3 python3-venv python3-pip \
+    pm_install git $CURL_PKG wget unzip tar gzip xz-utils tmux ripgrep build-essential python3 python3-venv python3-pip \
       -- fd-find clangd xclip ;;
   dnf)
-    pm_install git curl wget unzip tar gzip xz tmux gcc gcc-c++ make python3 python3-pip \
+    pm_install git $CURL_PKG wget unzip tar gzip xz tmux gcc gcc-c++ make python3 python3-pip \
       -- ripgrep fd-find clang-tools-extra xclip ;;
   yum)
-    pm_install git curl wget unzip tar gzip xz tmux gcc gcc-c++ make python3 python3-pip \
+    pm_install git $CURL_PKG wget unzip tar gzip xz tmux gcc gcc-c++ make python3 python3-pip \
       -- ripgrep fd-find clang-tools-extra xclip ;;
   pacman)
     sudo pacman -Sy --noconfirm
-    pm_install git curl wget unzip tar gzip xz tmux ripgrep base-devel python python-pip \
+    pm_install git $CURL_PKG wget unzip tar gzip xz tmux ripgrep base-devel python python-pip \
       -- fd clang xclip ;;
   zypper)
     sudo zypper --non-interactive refresh || true
-    pm_install git curl wget unzip tar gzip xz tmux ripgrep gcc gcc-c++ make python3 python3-pip \
+    pm_install git $CURL_PKG wget unzip tar gzip xz tmux ripgrep gcc gcc-c++ make python3 python3-pip \
       -- fd clang-tools xclip ;;
   apk)
     sudo apk update
@@ -134,16 +135,20 @@ if [ "$USE_PM_NVIM" = 0 ]; then
   sudo ln -sf "/opt/nvim-linux-${NVIM_ARCH}/bin/nvim" /usr/local/bin/nvim
 fi
 hash -r
-nvim --version >/dev/null 2>&1 || die "nvim failed to run (glibc too old?). Try a newer OS release."
-NVIM_MINOR="$(nvim --version | head -1 | sed -E 's/.*v0\.([0-9]+).*/\1/')"
-[ "${NVIM_MINOR:-0}" -ge 11 ] || warn "Neovim $(nvim --version | head -1) < 0.11, config needs 0.11+"
+# 先存成變數再處理：`nvim --version | head -1` 在 pipefail 下可能因 SIGPIPE 中斷 (exit 141)
+NVIM_VER="$(nvim --version 2>/dev/null)" || die "nvim failed to run (glibc too old?). Try a newer OS release."
+NVIM_VER="${NVIM_VER%%$'\n'*}"
+NVIM_MINOR="$(printf '%s' "$NVIM_VER" | sed -E 's/.*v0\.([0-9]+).*/\1/')"
+[ "${NVIM_MINOR:-0}" -ge 11 ] || warn "$NVIM_VER < 0.11, config needs 0.11+"
 
 # ---------- Node.js（pyright、ts_ls、bashls、prettier 等需要） ----------
 node_ok() { has node && [ "$(node -v | cut -d. -f1 | tr -d v)" -ge 18 ]; }
 if ! node_ok && [ "$USE_PM_NODE" = 0 ]; then
   log "Installing Node.js $NODE_MAJOR ($NODE_ARCH)"
   BASE="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x"
-  NODE_TAR="$(fetch "$BASE/SHASUMS256.txt" | grep -o "node-v[0-9.]*-linux-${NODE_ARCH}.tar.xz" | head -1)"
+  SUMS="$(fetch "$BASE/SHASUMS256.txt")"
+  NODE_TAR="$(printf '%s\n' "$SUMS" | awk -v a="linux-${NODE_ARCH}.tar.xz" '$2 ~ a"$" {print $2; exit}')"
+  [ -n "$NODE_TAR" ] || die "Cannot find Node.js tarball for linux-${NODE_ARCH}"
   fetch "$BASE/$NODE_TAR" "$TMP/$NODE_TAR"
   sudo rm -rf /opt/node && sudo mkdir -p /opt/node
   sudo tar -C /opt/node --strip-components=1 -xJf "$TMP/$NODE_TAR"
