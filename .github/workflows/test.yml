@@ -60,6 +60,7 @@ jobs:
           - { image: "debian:13" }
           - { image: "debian:12", arch: arm64, rerun: true } # old glibc + arm64, and a re-run
           - { image: "debian:13", arch: arm64 }
+          - { image: "ubuntu:22.04", arch: arm64 } # glibc 2.35: the prebuilt tree-sitter refuses to run
           - { image: "ubuntu:22.04" }
           - { image: "fedora:latest" }
           - { image: "rockylinux:9" }
