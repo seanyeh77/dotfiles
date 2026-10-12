@@ -185,12 +185,14 @@ log "Installing tmux plugins"
 "$HOME/.tmux/plugins/tpm/bin/install_plugins" >/dev/null || warn "tpm install failed, press prefix + I inside tmux"
 
 # ---------- nvim 外掛、LSP、treesitter parser（headless 一次裝完） ----------
+# 網路有問題時避免無限等待（macOS 沒有 timeout 就直接跑）
+with_timeout() { local s="$1"; shift; if has timeout; then timeout "$s" "$@"; else "$@"; fi; }
 log "Installing nvim plugins (Lazy)"
-nvim --headless "+Lazy! sync" +qa
+with_timeout 600 nvim --headless "+Lazy! sync" +qa || warn "Lazy sync failed or timed out, run :Lazy sync"
 log "Installing LSP servers / formatters (Mason)"
-nvim --headless -c "MasonToolsInstallSync" -c "qa" || warn "some Mason packages failed, check :Mason"
+with_timeout 900 nvim --headless -c "MasonToolsInstallSync" -c "qa" || warn "Mason failed or timed out (network?), check :Mason"
 log "Installing treesitter parsers"
-nvim --headless -c "lua require('nvim-treesitter').install(_G.TS_LANGS):wait(600000)" -c "qa" \
-  || warn "some parsers failed, check :checkhealth nvim-treesitter"
+with_timeout 900 nvim --headless -c "lua require('nvim-treesitter').install(_G.TS_LANGS):wait(600000)" -c "qa" \
+  || warn "parsers failed or timed out, check :checkhealth nvim-treesitter"
 
 log "Done. 開 nvim 執行 :checkhealth 確認狀態"
