@@ -2,7 +2,13 @@
 
 [![test](https://github.com/seanyeh77/dotfiles/actions/workflows/test.yml/badge.svg)](https://github.com/seanyeh77/dotfiles/actions/workflows/test.yml)
 
-A Neovim + tmux development environment, installed with one command.
+A Neovim + tmux development environment, installed with one command:
+
+- **Neovim**: [LazyVim](https://www.lazyvim.org) with language support for Python, C/C++, TypeScript/JavaScript, Rust, Go (when Go is installed), Bash, Lua, JSON, YAML, TOML, Docker, Markdown and CMake, in the [Catppuccin](https://catppuccin.com) theme
+- **tmux**: [Oh my tmux!](https://github.com/gpakosz/.tmux) with a Catppuccin status line
+- **Claude Code** (optional), with plugins
+
+The status line separators and file icons need a [Nerd Font](https://www.nerdfonts.com) in the terminal you connect from (the font lives on your local machine, not on the server).
 
 | OS | Package manager | Notes |
 | --- | --- | --- |
@@ -14,7 +20,7 @@ A Neovim + tmux development environment, installed with one command.
 | Alpine | apk | musl: some Mason tools cannot run (best effort) |
 | Windows | WSL | Run inside WSL, which counts as Linux; native Windows is not supported |
 
-Both amd64 and arm64 are supported. glibc Linux always uses the official Neovim release; macOS and Alpine use the package manager's Neovim. The config needs Neovim 0.11 or later.
+Both amd64 and arm64 are supported. glibc Linux always uses the official Neovim release; macOS and Alpine use the package manager's Neovim. LazyVim needs Neovim 0.11.2 or later.
 
 ## Install / update
 
@@ -28,7 +34,7 @@ Without curl:
 bash <(wget -qO- https://raw.githubusercontent.com/seanyeh77/dotfiles/main/install.sh)
 ```
 
-Re-running the same command updates everything (pulls the latest config, syncs plugins and LSP servers). Existing `~/.config/nvim` and `~/.tmux.conf` are backed up as `.bak.<timestamp>` before being replaced.
+Re-running the same command updates everything (pulls the latest config, syncs plugins and LSP servers). Existing `~/.config/nvim`, `~/.tmux.conf` and `~/.tmux.conf.local` are backed up as `.bak.<timestamp>` before being replaced.
 
 ## Claude Code (optional)
 
@@ -58,33 +64,53 @@ INSTALL_CLAUDE=1 CLAUDE_PLUGINS="commit-commands code-review" bash <(curl -fsSL 
 | File | Purpose |
 | --- | --- |
 | `install.sh` | Installs system packages, Neovim, Node.js and the tree-sitter CLI, links the config, installs plugins headless |
-| `nvim/init.lua` | lazy.nvim, Treesitter, Mason + LSP, blink.cmp completion, conform formatting, telescope |
-| `tmux.conf` | Prefix `C-a`, mouse, vim-style pane navigation, `prefix + A` for Claude, tpm plugins |
+| `nvim/lua/config/lazy.lua` | LazyVim and the enabled language extras |
+| `nvim/lua/config/options.lua` | Options on top of LazyVim's defaults |
+| `nvim/lua/plugins/dotfiles.lua` | Overrides: Catppuccin, bash, system clangd / Alpine handling, extra Mason packages |
+| `nvim/lua/dotfiles/headless.lua` | Installs every Mason package and parser LazyVim wants and waits for them (used by `install.sh` and CI) |
+| `tmux/tmux.conf.local` | Oh my tmux! settings: Catppuccin colours, prefix `C-a`, `prefix + A` for Claude |
 | `shell/env.sh` | Adds `~/.local/bin` and Mason's `bin` to `PATH`; sourced from `~/.bashrc` / `~/.zshrc` |
 | `ci/verify.lua` | Checks that plugins, LSP servers, parsers and formatting actually work |
+| `ci/verify-tmux.sh` | Checks that tmux loads the config with the expected prefix, colours and keys |
 | `ci/verify-claude.sh` | Checks that Claude Code and its plugins are installed |
 | `.github/workflows/test.yml` | Runs the installer and verification on every supported OS and architecture |
 
 ## Adding a language
 
-Edit the lists near the top of `nvim/init.lua`:
+LazyVim has a ready-made "extra" for most languages, which sets up the LSP server, formatter, linter and Treesitter parser together. Browse them inside Neovim with `:LazyExtras`, then add the import to `nvim/lua/config/lazy.lua` so every machine gets it, for example:
 
-- `servers`: LSP servers (lspconfig names)
-- `mason_tools`: formatters (Mason package names)
-- `TS_LANGS`: Treesitter parsers
+```lua
+{ import = "lazyvim.plugins.extras.lang.java" },
+```
+
+Re-run the installer (or restart Neovim) to install the new tools.
 
 ## Key bindings
 
-| Keys | Action |
+Neovim's leader key is `Space`. Press it and wait: a menu lists every binding.
+
+| Neovim | Action |
 | --- | --- |
-| `gd` / `K` | Go to definition / hover docs |
-| `grn` / `gra` / `grr` | Rename / code action / references |
-| `<Space>f` | Format buffer |
-| `<Space>e` | Show diagnostic |
-| `<Space>sf` / `<Space>sg` / `<Space>sb` | Find files / grep / buffers |
-| tmux `C-a \|` / `C-a -` | Split left-right / top-bottom |
-| tmux `C-a h/j/k/l` | Move between panes |
-| tmux `C-a A` | Open Claude Code in a split |
+| `Space Space` / `Space /` | Find files / search text in the project |
+| `Space e` | File explorer |
+| `Space ,` | Switch between open files |
+| `Shift-h` / `Shift-l` | Previous / next file (tab bar) |
+| `gd` / `gr` / `K` | Go to definition / references / hover docs |
+| `Space ca` / `Space cr` / `Space cf` | Code action / rename / format |
+| `]d` / `[d` | Next / previous diagnostic |
+| `Ctrl-h/j/k/l` | Move between splits |
+| `Space l` / `Space cm` | Plugin manager (Lazy) / Mason |
+
+The tmux prefix is `Ctrl-a`.
+
+| tmux | Action |
+| --- | --- |
+| `C-a \|` or `C-a _` / `C-a -` | Split side by side / top and bottom |
+| `C-a h/j/k/l` | Move between panes |
+| `C-a +` | Maximize the current pane (again to restore) |
+| `C-a c` / `C-a n` / `C-a p` | New window / next / previous |
+| `C-a A` | Open Claude Code in a split |
+| `C-a e` / `C-a r` | Edit / reload `~/.tmux.conf.local` |
 
 ## Environment variables
 
@@ -99,5 +125,6 @@ Edit the lists near the top of `nvim/init.lua`:
 ## Troubleshooting
 
 - **Old glibc (Debian 12, RHEL 9).** The prebuilt tree-sitter CLI needs glibc 2.39, so the installer builds it from source with cargo. The first install takes a few extra minutes.
-- **Slow parser builds with gcc 12.2.** tree-sitter compiles parsers with `-Wall` by default, which makes gcc 12.2 take minutes on large generated parsers such as `gitcommit`. Both `install.sh` and `init.lua` set `CFLAGS=-O2` to avoid it.
-- **Checking the result.** Run `:checkhealth` and `:Mason` inside Neovim.
+- **Slow parser builds with gcc 12.2.** tree-sitter compiles parsers with `-Wall` by default, which makes gcc 12.2 take minutes on large generated parsers such as `gitcommit`. Both `install.sh` and `nvim/lua/config/options.lua` set `CFLAGS=-O2` to avoid it.
+- **Icons show as boxes or question marks.** Install a Nerd Font on the machine you connect from and select it in that terminal.
+- **Checking the result.** Run `:checkhealth`, `:Mason` and `:LazyHealth` inside Neovim.

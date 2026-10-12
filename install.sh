@@ -255,8 +255,17 @@ link() { # back up existing config instead of overwriting it
   if [ -e "$dst" ] && [ ! -L "$dst" ]; then mv "$dst" "$dst.bak.$(date +%s)"; fi
   ln -sfn "$src" "$dst"
 }
-link "$DOTFILES_DIR/nvim"      "$HOME/.config/nvim"
-link "$DOTFILES_DIR/tmux.conf" "$HOME/.tmux.conf"
+link "$DOTFILES_DIR/nvim" "$HOME/.config/nvim"
+
+# tmux: Oh my tmux! (https://github.com/gpakosz/.tmux) plus this repo's tmux/tmux.conf.local
+OH_MY_TMUX="${XDG_DATA_HOME:-$HOME/.local/share}/oh-my-tmux"
+if [ -d "$OH_MY_TMUX/.git" ]; then
+  git -C "$OH_MY_TMUX" pull --ff-only -q || warn "could not update Oh my tmux!"
+else
+  git clone -q --depth 1 https://github.com/gpakosz/.tmux "$OH_MY_TMUX"
+fi
+link "$OH_MY_TMUX/.tmux.conf" "$HOME/.tmux.conf"
+link "$DOTFILES_DIR/tmux/tmux.conf.local" "$HOME/.tmux.conf.local"
 
 # Load shell/env.sh (PATH for ~/.local/bin and Mason) from the shell rc files, once
 SOURCE_LINE="[ -f \"$DOTFILES_DIR/shell/env.sh\" ] && . \"$DOTFILES_DIR/shell/env.sh\" # dotfiles"
@@ -270,33 +279,20 @@ done
 # shellcheck source=shell/env.sh
 . "$DOTFILES_DIR/shell/env.sh"
 
-# ---------- tmux plugins ----------
-log "Installing tmux plugins"
-[ -d "$HOME/.tmux/plugins/tpm" ] || git clone --depth 1 https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm"
-"$HOME/.tmux/plugins/tpm/bin/install_plugins" >/dev/null || warn "tpm install failed, press prefix + I inside tmux"
-
 # ---------- nvim plugins, LSP servers, treesitter parsers (all headless) ----------
 # Bound every step so a network problem cannot hang forever (macOS has no timeout: run as is)
 with_timeout() { local s="$1"; shift; if has timeout; then timeout "$s" "$@"; else "$@"; fi; }
-log "Installing nvim plugins (Lazy)"
-with_timeout 600 nvim --headless "+Lazy! sync" +qa || warn "Lazy sync failed or timed out, run :Lazy sync"
-log "Installing LSP servers / formatters (Mason)"
-with_timeout 900 nvim --headless -c "MasonToolsInstallSync" -c "qa" || warn "Mason failed or timed out (network?), check :Mason"
+log "Installing nvim plugins (LazyVim)"
+with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! sync" +qa || warn "Lazy sync failed or timed out, run :Lazy sync"
 
-log "Installing treesitter parsers"
-# Setting CFLAGS replaces tree-sitter's default compiler flags, which include -Wall.
-# gcc 12.2 (Debian 12) spends minutes on -Wall for large generated parsers such as gitcommit;
-# with CFLAGS set the same parser builds in seconds. init.lua sets the same default.
+log "Installing LSP servers, formatters and treesitter parsers"
+# CFLAGS: tree-sitter's default flags include -Wall, which makes gcc 12.2 (Debian 12) spend
+# minutes on large generated parsers such as gitcommit. config/options.lua sets the same default.
 export CFLAGS="${CFLAGS:--O2}"
-mkdir -p "$HOME/.cache/tree-sitter/lock"
-# Parallel builds occasionally fail; the second round only retries what is still missing
-for round in 1 2; do
-  rm -f "$HOME/.cache/tree-sitter/lock/"*.lock # stale locks left by an interrupted round
-  with_timeout 300 nvim --headless -c "lua require('nvim-treesitter').install(_G.TS_LANGS):wait(280000)" -c "qa" \
-    || warn "treesitter round $round failed or timed out"
-done
-MISSING_TS="$(nvim --headless -c "lua local i=require('nvim-treesitter').get_installed(); local m={}; for _,l in ipairs(_G.TS_LANGS) do if not vim.list_contains(i,l) then table.insert(m,l) end end; io.stdout:write(table.concat(m,' '))" -c qa 2>/dev/null)" || true
-[ -z "$MISSING_TS" ] || warn "treesitter parsers not installed: $MISSING_TS"
+# DOTFILES_HEADLESS_INSTALL stops LazyVim's background parser builds; headless.lua builds them
+# itself and waits for every Mason package and parser to finish (see nvim/lua/dotfiles/headless.lua)
+with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install()" \
+  || warn "some LSP servers or parsers did not install, open nvim and check :Mason and :checkhealth"
 
 # ---------- Claude Code (optional, see the questions at the top) ----------
 if [ "$INSTALL_CLAUDE" = 1 ]; then
@@ -339,4 +335,4 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
   fi
 fi
 
-log "Done. Open nvim and run :checkhealth to verify"
+log "Done. Open a new shell, then run nvim (and tmux). :checkhealth and :Mason show the details"

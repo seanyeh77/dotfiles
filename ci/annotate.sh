@@ -8,7 +8,7 @@ dir="${1:-.}"
 encode() { local s="$1"; s="${s//'%'/'%25'}"; s="${s//$'\r'/'%0D'}"; s="${s//$'\n'/'%0A'}"; printf '%s' "$s"; }
 strip_ansi() { sed -E $'s/\x1b\\[[0-9;]*[A-Za-z]//g'; }
 
-for name in install verify verify-claude; do
+for name in install verify verify-tmux verify-claude; do
   f="$dir/$name.log"
   [ -s "$f" ] || continue
   # 1. Failed verify checks
