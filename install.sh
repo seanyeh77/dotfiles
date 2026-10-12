@@ -220,6 +220,12 @@ for round in 1 2; do
   with_timeout 300 nvim --headless -c "lua require('nvim-treesitter').install(_G.TS_LANGS):wait(280000)" -c "qa" \
     || warn "treesitter round $round failed or timed out"
 done
+# 選用 parser：每個最多 90 秒，失敗只警告
+for lang in $(nvim --headless -c "lua io.stdout:write(table.concat(_G.TS_OPTIONAL or {},' '))" -c qa 2>/dev/null); do
+  rm -f "$HOME/.cache/tree-sitter/lock/$lang"-*.lock
+  with_timeout 90 nvim --headless -c "lua require('nvim-treesitter').install({'$lang'}):wait(80000)" -c "qa" >/dev/null 2>&1 \
+    || warn "optional treesitter parser '$lang' failed (only affects its syntax highlighting)"
+done
 MISSING_TS="$(nvim --headless -c "lua local i=require('nvim-treesitter').get_installed(); local m={}; for _,l in ipairs(_G.TS_LANGS) do if not vim.list_contains(i,l) then table.insert(m,l) end end; io.stdout:write(table.concat(m,' '))" -c qa 2>/dev/null)" || true
 [ -z "$MISSING_TS" ] || warn "treesitter parsers not installed: $MISSING_TS"
 

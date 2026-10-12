@@ -75,8 +75,11 @@ _G.TS_LANGS = {
   "c", "cpp", "cuda", "python", "bash", "lua", "rust", "go",
   "javascript", "typescript", "tsx", "json", "yaml", "toml",
   "dockerfile", "make", "cmake", "markdown", "markdown_inline",
-  "html", "css", "sql", "vim", "vimdoc", "diff", "gitcommit",
+  "html", "css", "sql", "vim", "vimdoc", "diff",
 }
+-- 選用 parser：裝不起來只警告，不擋安裝
+--   gitcommit：在 Debian 12 上編譯會卡住（原因未明），其他系統正常
+_G.TS_OPTIONAL = { "gitcommit" }
 
 -- ========== lazy.nvim ==========
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
@@ -99,6 +102,7 @@ require("lazy").setup({
       if #vim.api.nvim_list_uis() > 0 then
         local ts = require("nvim-treesitter")
         local installed = ts.get_installed()
+        -- 只補必要 parser；選用的由 install.sh 嘗試，避免每次開 nvim 都在背景卡一個編譯
         local missing = vim.tbl_filter(function(l) return not vim.list_contains(installed, l) end, _G.TS_LANGS)
         if #missing > 0 then ts.install(missing) end
       end

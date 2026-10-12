@@ -3,9 +3,10 @@
 -- 任一項失敗以 exit code 1 結束
 
 local results, failed = {}, 0
-local function check(name, ok, detail)
-  if not ok then failed = failed + 1 end
-  table.insert(results, string.format("%s %-40s %s", ok and "PASS" or "FAIL", name, detail or ""))
+local function check(name, ok, detail, optional)
+  local tag = ok and "PASS" or (optional and "WARN" or "FAIL")
+  if tag == "FAIL" then failed = failed + 1 end
+  table.insert(results, string.format("%s %-40s %s", tag, name, detail or ""))
 end
 
 -- 1. startup 錯誤
@@ -39,6 +40,10 @@ end
 for _, lang in ipairs(_G.TS_LANGS or {}) do
   local ok, res = pcall(vim.treesitter.language.add, lang)
   check("treesitter: " .. lang, ok and res ~= nil and res ~= false, ok and "" or tostring(res))
+end
+for _, lang in ipairs(_G.TS_OPTIONAL or {}) do
+  local ok, res = pcall(vim.treesitter.language.add, lang)
+  check("treesitter (optional): " .. lang, ok and res ~= nil and res ~= false, "", true)
 end
 
 -- 4. LSP 實際 attach（開檔後等 client 起來）
