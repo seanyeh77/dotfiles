@@ -30,14 +30,39 @@ bash <(wget -qO- https://raw.githubusercontent.com/seanyeh77/dotfiles/main/insta
 
 Re-running the same command updates everything (pulls the latest config, syncs plugins and LSP servers). Existing `~/.config/nvim` and `~/.tmux.conf` are backed up as `.bak.<timestamp>` before being replaced.
 
+## Claude Code (optional)
+
+At the start, the installer asks whether to install [Claude Code](https://code.claude.com/docs/en/overview) and which plugins to add from Anthropic's official marketplace:
+
+| Plugin | Purpose |
+| --- | --- |
+| `commit-commands` | Commit, push and open pull requests |
+| `code-review` | Review your changes before committing |
+| `feature-dev` | Guided feature development workflow |
+| `security-guidance` | Warn about security issues while Claude edits |
+
+Language-server plugins (`pyright-lsp`, `clangd-lsp`, `typescript-lsp`, `rust-analyzer-lsp`, `lua-lsp`, and `gopls-lsp` when Go is installed) are added automatically. They give Claude live diagnostics and go-to-definition, reusing the servers Mason installed for Neovim: `shell/env.sh` puts Mason's `bin` folder and `~/.local/bin` on your `PATH`.
+
+In tmux, `prefix + A` opens `claude` in a split next to the current pane. Log in the first time you start it.
+
+To skip the questions, preset the answers:
+
+```bash
+INSTALL_CLAUDE=1 CLAUDE_PLUGINS="commit-commands code-review" bash <(curl -fsSL https://raw.githubusercontent.com/seanyeh77/dotfiles/main/install.sh)
+```
+
+`INSTALL_CLAUDE=0` skips Claude Code. Without a terminal (CI, cron) and nothing preset, it is skipped.
+
 ## Contents
 
 | File | Purpose |
 | --- | --- |
 | `install.sh` | Installs system packages, Neovim, Node.js and the tree-sitter CLI, links the config, installs plugins headless |
 | `nvim/init.lua` | lazy.nvim, Treesitter, Mason + LSP, blink.cmp completion, conform formatting, telescope |
-| `tmux.conf` | Prefix `C-a`, mouse, vim-style pane navigation, tpm plugins |
+| `tmux.conf` | Prefix `C-a`, mouse, vim-style pane navigation, `prefix + A` for Claude, tpm plugins |
+| `shell/env.sh` | Adds `~/.local/bin` and Mason's `bin` to `PATH`; sourced from `~/.bashrc` / `~/.zshrc` |
 | `ci/verify.lua` | Checks that plugins, LSP servers, parsers and formatting actually work |
+| `ci/verify-claude.sh` | Checks that Claude Code and its plugins are installed |
 | `.github/workflows/test.yml` | Runs the installer and verification on every supported OS and architecture |
 
 ## Adding a language
@@ -59,6 +84,7 @@ Edit the lists near the top of `nvim/init.lua`:
 | `<Space>sf` / `<Space>sg` / `<Space>sb` | Find files / grep / buffers |
 | tmux `C-a \|` / `C-a -` | Split left-right / top-bottom |
 | tmux `C-a h/j/k/l` | Move between panes |
+| tmux `C-a A` | Open Claude Code in a split |
 
 ## Environment variables
 
@@ -67,6 +93,8 @@ Edit the lists near the top of `nvim/init.lua`:
 | `DOTFILES_REPO` | `https://github.com/seanyeh77/dotfiles` |
 | `DOTFILES_DIR` | `~/dotfiles` |
 | `NODE_MAJOR` | `22` |
+| `INSTALL_CLAUDE` | ask (`1` install, `0` skip) |
+| `CLAUDE_PLUGINS` | ask (space-separated plugin names) |
 
 ## Troubleshooting
 

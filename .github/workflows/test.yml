@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: ubuntu-24.04 amd64, os: ubuntu-24.04 }
+          - { name: ubuntu-24.04 amd64 + claude, os: ubuntu-24.04, claude: true }
           - { name: ubuntu-24.04 arm64, os: ubuntu-24.04-arm }
           - { name: macos arm64,        os: macos-latest }
     steps:
@@ -28,8 +28,14 @@ jobs:
         shell: bash -o pipefail {0}
         env:
           DOTFILES_DIR: ${{ github.workspace }}
+          INSTALL_CLAUDE: ${{ matrix.claude && '1' || '0' }}
+          CLAUDE_PLUGINS: commit-commands
       - name: verify
         run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
+        shell: bash -o pipefail {0}
+      - name: verify claude
+        if: matrix.claude
+        run: bash ci/verify-claude.sh commit-commands 2>&1 | tee "$RUNNER_TEMP/verify-claude.log"
         shell: bash -o pipefail {0}
       - name: report failure
         if: failure() || cancelled()

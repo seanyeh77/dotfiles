@@ -53,6 +53,61 @@ USE_PM_NVIM=0; USE_PM_NODE=0
 [ "$PM" = brew ] && { USE_PM_NVIM=1; USE_PM_NODE=1; }
 [ "$PM" = apk ]  && { USE_PM_NVIM=1; USE_PM_NODE=1; }
 
+# ---------- Questions (asked up front so the rest runs unattended) ----------
+# INSTALL_CLAUDE=1/0 and CLAUDE_PLUGINS="a b" preset the answers; with no terminal
+# (CI, cron) and nothing preset, Claude Code is skipped.
+CLAUDE_WORKFLOW_PLUGINS=(
+  "commit-commands|commit, push and open pull requests"
+  "code-review|review your changes before committing"
+  "feature-dev|guided feature development workflow"
+  "security-guidance|warn about security issues while Claude edits"
+)
+HAS_TTY=0; ( exec </dev/tty ) 2>/dev/null && HAS_TTY=1
+ask() { # ask PROMPT DEFAULT -> REPLY
+  REPLY="$2"
+  [ "$HAS_TTY" = 1 ] || return 0
+  printf '\033[1;36m??\033[0m %s ' "$1" > /dev/tty
+  read -r REPLY < /dev/tty || true
+  [ -n "$REPLY" ] || REPLY="$2"
+}
+
+if [ -z "${INSTALL_CLAUDE:-}" ]; then
+  INSTALL_CLAUDE=0
+  if [ "$HAS_TTY" = 1 ]; then
+    ask "Install Claude Code? [Y/n]" y
+    case "$REPLY" in [Nn]*) INSTALL_CLAUDE=0 ;; *) INSTALL_CLAUDE=1 ;; esac
+  fi
+fi
+if [ "$INSTALL_CLAUDE" = 1 ] && [ -z "${CLAUDE_PLUGINS+set}" ]; then
+  CLAUDE_PLUGINS=""
+  for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do CLAUDE_PLUGINS="$CLAUDE_PLUGINS ${e%%|*}"; done
+  if [ "$HAS_TTY" = 1 ]; then
+    {
+      echo "   Claude Code plugins (Anthropic's official marketplace):"
+      i=1; for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do
+        printf '     %d) %-18s %s\n' "$i" "${e%%|*}" "${e#*|}"; i=$((i + 1))
+      done
+      echo "   Language-server plugins are added automatically for the languages nvim supports."
+    } > /dev/tty
+    ask "Install which? all / none / numbers, e.g. 1 3 [all]" all
+    case "$REPLY" in
+      all|ALL|a) ;;
+      none|NONE|n) CLAUDE_PLUGINS="" ;;
+      *) CLAUDE_PLUGINS=""
+         for n in $REPLY; do
+           case "$n" in
+             *[!0-9]*|"") warn "ignoring '$n'" ;;
+             *) if [ "$n" -ge 1 ] && [ "$n" -le "${#CLAUDE_WORKFLOW_PLUGINS[@]}" ]; then
+                  e="${CLAUDE_WORKFLOW_PLUGINS[$((n - 1))]}"; CLAUDE_PLUGINS="$CLAUDE_PLUGINS ${e%%|*}"
+                else warn "ignoring '$n'"; fi ;;
+           esac
+         done ;;
+    esac
+  fi
+fi
+CLAUDE_PLUGINS="$(echo ${CLAUDE_PLUGINS:-})" # normalize spaces
+[ "$INSTALL_CLAUDE" = 1 ] && log "Claude Code: yes, plugins: ${CLAUDE_PLUGINS:-none}" || log "Claude Code: skipped"
+
 # ---------- System packages ----------
 # Required: git, curl, unzip, tar, gzip (Mason downloads), a C compiler (treesitter parsers), tmux, ripgrep
 # Optional: fd, clangd, xclip; installed when available, skipped with a warning otherwise
@@ -203,6 +258,18 @@ link() { # back up existing config instead of overwriting it
 link "$DOTFILES_DIR/nvim"      "$HOME/.config/nvim"
 link "$DOTFILES_DIR/tmux.conf" "$HOME/.tmux.conf"
 
+# Load shell/env.sh (PATH for ~/.local/bin and Mason) from the shell rc files, once
+SOURCE_LINE="[ -f \"$DOTFILES_DIR/shell/env.sh\" ] && . \"$DOTFILES_DIR/shell/env.sh\" # dotfiles"
+for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  # Always use ~/.bashrc; use ~/.zshrc when it exists, or on macOS where zsh is the default shell
+  case "$rc" in
+    */.zshrc) [ -f "$rc" ] || [ "$OS" = Darwin ] || continue ;;
+  esac
+  grep -qsF "$DOTFILES_DIR/shell/env.sh" "$rc" || printf '\n%s\n' "$SOURCE_LINE" >> "$rc"
+done
+# shellcheck source=shell/env.sh
+. "$DOTFILES_DIR/shell/env.sh"
+
 # ---------- tmux plugins ----------
 log "Installing tmux plugins"
 [ -d "$HOME/.tmux/plugins/tpm" ] || git clone --depth 1 https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm"
@@ -230,5 +297,46 @@ for round in 1 2; do
 done
 MISSING_TS="$(nvim --headless -c "lua local i=require('nvim-treesitter').get_installed(); local m={}; for _,l in ipairs(_G.TS_LANGS) do if not vim.list_contains(i,l) then table.insert(m,l) end end; io.stdout:write(table.concat(m,' '))" -c qa 2>/dev/null)" || true
 [ -z "$MISSING_TS" ] || warn "treesitter parsers not installed: $MISSING_TS"
+
+# ---------- Claude Code (optional, see the questions at the top) ----------
+if [ "$INSTALL_CLAUDE" = 1 ]; then
+  log "Installing Claude Code"
+  if [ "$PM" = apk ]; then
+    # musl: the native binary needs libgcc / libstdc++ and uses the system ripgrep
+    sudo apk add libgcc libstdc++ ripgrep >/dev/null
+    mkdir -p "$HOME/.claude"
+    if [ ! -f "$HOME/.claude/settings.json" ]; then
+      printf '{\n  "env": { "USE_BUILTIN_RIPGREP": "0" }\n}\n' > "$HOME/.claude/settings.json"
+    elif ! grep -q USE_BUILTIN_RIPGREP "$HOME/.claude/settings.json"; then
+      warn 'add "env": { "USE_BUILTIN_RIPGREP": "0" } to ~/.claude/settings.json (needed on Alpine)'
+    fi
+  fi
+  # Native installer: updates itself in the background, so re-runs only install when missing
+  if ! has claude; then
+    fetch https://claude.ai/install.sh "$TMP/claude-install.sh"
+    bash "$TMP/claude-install.sh"
+    . "$DOTFILES_DIR/shell/env.sh"; hash -r
+  fi
+  if has claude; then
+    log "$(claude --version 2>/dev/null || echo 'claude installed')"
+    # The official marketplace is only registered by the first interactive session, so add it here
+    MP=claude-plugins-official
+    claude plugin marketplace add "anthropics/$MP" >/dev/null 2>&1 || true
+    INSTALLED_PLUGINS="$(claude plugin list 2>/dev/null || true)"
+    claude_plugin() { # claude_plugin NAME
+      case "$INSTALLED_PLUGINS" in *"$1@$MP"*) return 0 ;; esac
+      claude plugin install "$1@$MP" >/dev/null 2>&1 && log "  plugin: $1" || warn "plugin install failed: $1"
+    }
+    # Language-server plugins: one per nvim language whose server is on PATH (Mason's bin is)
+    for pair in pyright-lsp:pyright-langserver clangd-lsp:clangd typescript-lsp:typescript-language-server \
+                rust-analyzer-lsp:rust-analyzer lua-lsp:lua-language-server gopls-lsp:gopls; do
+      if has "${pair#*:}"; then claude_plugin "${pair%%:*}"; fi
+    done
+    for p in ${CLAUDE_PLUGINS:-}; do claude_plugin "$p"; done
+    log "Claude Code ready: run 'claude' (or prefix + A in tmux) and log in on first start"
+  else
+    warn "Claude Code install failed; see https://code.claude.com/docs/en/troubleshoot-install"
+  fi
+fi
 
 log "Done. Open nvim and run :checkhealth to verify"
