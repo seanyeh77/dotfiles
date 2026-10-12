@@ -1,0 +1,82 @@
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 1" # 每週一 10:00 (UTC+8)，抓上游（nvim / 外掛 / LSP）更新造成的問題
+
+jobs:
+  # 各 OS / 架構的原生 runner
+  native:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: ubuntu-24.04 amd64, os: ubuntu-24.04 }
+          - { name: ubuntu-24.04 arm64, os: ubuntu-24.04-arm }
+          - { name: macos arm64,        os: macos-latest }
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.sh
+        run: bash install.sh
+        env:
+          DOTFILES_DIR: ${{ github.workspace }}
+      - name: verify
+        run: nvim --headless -c "luafile ci/verify.lua"
+
+  # 其他 distro 用 container 跑（都以 root 執行，順便測沒有 sudo 的情況）
+  distro:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    timeout-minutes: 45
+    continue-on-error: ${{ matrix.experimental || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "debian:12" }
+          - { image: "ubuntu:22.04" }
+          - { image: "fedora:latest" }
+          - { image: "rockylinux:9" }
+          - { image: "archlinux:latest" }
+          - { image: "opensuse/tumbleweed" }
+          - { image: "alpine:latest", experimental: true } # musl，部分 Mason binary 無法執行
+    steps:
+      # checkout 需要 git（否則沒有 .git，install.sh 會嘗試重新 clone）
+      - name: bootstrap git
+        shell: sh
+        run: |
+          if   command -v apt-get >/dev/null; then apt-get update && apt-get install -y git
+          elif command -v dnf     >/dev/null; then dnf install -y git
+          elif command -v pacman  >/dev/null; then pacman -Sy --noconfirm git
+          elif command -v zypper  >/dev/null; then zypper --non-interactive install git tar gzip
+          elif command -v apk     >/dev/null; then apk add git bash
+          fi
+      - uses: actions/checkout@v4
+      - name: install.sh
+        run: bash install.sh
+        shell: bash
+        env:
+          DOTFILES_DIR: ${{ github.workspace }}
+      - name: verify
+        run: nvim --headless -c "luafile ci/verify.lua"
+        shell: bash
+
+  # 測真正給使用者用的那行指令（只在 main 跑，因為 raw 網址抓的是 main）
+  one-liner:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: curl | bash
+        run: bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh)
+        env:
+          DOTFILES_REPO: https://github.com/${{ github.repository }}
+      - name: verify
+        run: nvim --headless -c "luafile $HOME/dotfiles/ci/verify.lua"

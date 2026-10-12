@@ -53,6 +53,9 @@ if vim.fn.executable("go") == 1 then table.insert(mason_servers, "gopls") end
 -- Formatter（Mason 套件名稱）
 local mason_tools = { "stylua", "ruff", "shfmt", "prettier", "clang-format" }
 
+-- 給 CI 驗證用（ci/verify.lua 讀這份清單）
+_G.DOTFILES = { mason_servers = mason_servers, mason_tools = mason_tools, system_clangd = system_clangd }
+
 -- Treesitter parser（語法高亮）
 _G.TS_LANGS = {
   "c", "cpp", "cuda", "python", "bash", "lua", "rust", "go",
