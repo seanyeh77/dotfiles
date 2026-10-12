@@ -94,7 +94,14 @@ require("lazy").setup({
   -- 語法高亮
   { "nvim-treesitter/nvim-treesitter", branch = "main", lazy = false, build = ":TSUpdate",
     config = function()
-      require("nvim-treesitter").install(_G.TS_LANGS)
+      -- 只在互動模式補裝缺少的 parser；headless（install.sh、CI）由 install.sh 統一安裝，
+      -- 避免多個 nvim 同時編譯、中途被關掉留下 stale lock
+      if #vim.api.nvim_list_uis() > 0 then
+        local ts = require("nvim-treesitter")
+        local installed = ts.get_installed()
+        local missing = vim.tbl_filter(function(l) return not vim.list_contains(installed, l) end, _G.TS_LANGS)
+        if #missing > 0 then ts.install(missing) end
+      end
       vim.api.nvim_create_autocmd("FileType", {
         callback = function(args)
           if pcall(vim.treesitter.start, args.buf) then
