@@ -47,8 +47,8 @@ jobs:
 
   # Other distros run in containers (as root, which also covers the no-sudo path)
   distro:
-    name: ${{ matrix.image }}
-    runs-on: ubuntu-24.04
+    name: ${{ matrix.image }}${{ matrix.arch == 'arm64' && ' arm64' || '' }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     container: ${{ matrix.image }}
     timeout-minutes: 45
     continue-on-error: ${{ matrix.experimental || false }}
@@ -57,6 +57,9 @@ jobs:
       matrix:
         include:
           - { image: "debian:12" }
+          - { image: "debian:13" }
+          - { image: "debian:12", arch: arm64, rerun: true } # old glibc + arm64, and a re-run
+          - { image: "debian:13", arch: arm64 }
           - { image: "ubuntu:22.04" }
           - { image: "fedora:latest" }
           - { image: "rockylinux:9" }
@@ -81,6 +84,24 @@ jobs:
         shell: bash -o pipefail {0}
         env:
           DOTFILES_DIR: ${{ github.workspace }}
+      # Reproduces a real failure: a Mason tree-sitter that needs glibc 2.39 shadowing the
+      # working one on PATH (old env.sh put Mason first), then re-running the installer
+      - name: re-run install.sh with a broken Mason tree-sitter first on PATH
+        if: matrix.rerun
+        timeout-minutes: 25
+        shell: bash -o pipefail {0}
+        env:
+          DOTFILES_DIR: ${{ github.workspace }}
+        run: |
+          M="$HOME/.local/share/nvim/mason"
+          mkdir -p "$M/bin" "$M/packages/tree-sitter-cli"
+          cp /opt/node/lib/node_modules/tree-sitter-cli/tree-sitter "$M/packages/tree-sitter-cli/tree-sitter"
+          ln -sf "$M/packages/tree-sitter-cli/tree-sitter" "$M/bin/tree-sitter"
+          if "$M/bin/tree-sitter" --version >/dev/null 2>&1; then echo "::warning::planted binary runs here, test is weaker"; fi
+          export PATH="$M/bin:$PATH"
+          rm -f "$HOME/.local/share/nvim/site/parser/c.so"   # force a parser to compile again
+          bash install.sh 2>&1 | tee "$RUNNER_TEMP/install-rerun.log"
+          ! grep -q "GLIBC_2.39" "$RUNNER_TEMP/install-rerun.log"
       - name: verify
         run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
         shell: bash -o pipefail {0}

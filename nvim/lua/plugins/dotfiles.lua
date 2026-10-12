@@ -64,6 +64,10 @@ return {
   {
     "mason-org/mason.nvim",
     opts = function(_, opts)
+      -- Put Mason's bin last on PATH: tools from the OS and install.sh win, Mason only fills gaps.
+      -- Otherwise a Mason binary that cannot run here (e.g. tree-sitter-cli needs glibc 2.39)
+      -- would shadow a working one.
+      opts.PATH = "append"
       opts.ensure_installed = opts.ensure_installed or {}
       -- codelldb is the Rust/C debugger for LazyVim's DAP extra, which is not enabled
       opts.ensure_installed = vim.tbl_filter(function(name)

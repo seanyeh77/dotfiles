@@ -239,6 +239,13 @@ fi
 if ! has tree-sitter || ts_broken; then
   warn "tree-sitter CLI missing or broken, syntax highlighting parsers will not compile"
 fi
+# LazyVim installs tree-sitter-cli through Mason when none is on PATH (e.g. nvim was opened before
+# this step finished). That is the same glibc 2.39 build, so remove it if it cannot run here.
+MASON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/mason"
+if [ -e "$MASON_DIR/bin/tree-sitter" ] && ! "$MASON_DIR/bin/tree-sitter" --version >/dev/null 2>&1; then
+  log "Removing Mason's tree-sitter-cli (cannot run on this system)"
+  rm -rf "$MASON_DIR/packages/tree-sitter-cli" "$MASON_DIR/bin/tree-sitter"
+fi
 
 # ---------- dotfiles ----------
 log "Linking dotfiles"
