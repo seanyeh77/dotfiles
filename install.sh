@@ -110,6 +110,7 @@ CLAUDE_PLUGINS="$(echo ${CLAUDE_PLUGINS:-})" # normalize spaces
 
 # ---------- System packages ----------
 # Required: git, curl, unzip, tar, gzip (Mason downloads), a C compiler (treesitter parsers), tmux, ripgrep
+# perl: Oh my tmux! needs it to apply its theme (git usually pulls it in, minimal Alpine does not)
 # Optional: fd, clangd, xclip; installed when available, skipped with a warning otherwise
 pm_install() { # pm_install REQUIRED... -- OPTIONAL...
   local req=() opt=() seen=0
@@ -153,24 +154,24 @@ case "$PM" in
   apt-get)
     sudo apt-get update || true
     pm_install git $CURL_PKG wget unzip tar gzip xz-utils tmux ripgrep build-essential python3 python3-venv python3-pip \
-      -- fd-find clangd xclip ;;
+      -- fd-find clangd xclip perl ;;
   dnf)
     pm_install git $CURL_PKG wget unzip tar gzip xz tmux gcc gcc-c++ make python3 python3-pip \
-      -- ripgrep fd-find clang-tools-extra xclip ;;
+      -- ripgrep fd-find clang-tools-extra xclip perl ;;
   yum)
     pm_install git $CURL_PKG wget unzip tar gzip xz tmux gcc gcc-c++ make python3 python3-pip \
-      -- ripgrep fd-find clang-tools-extra xclip ;;
+      -- ripgrep fd-find clang-tools-extra xclip perl ;;
   pacman)
     sudo pacman -Sy --noconfirm
     pm_install git $CURL_PKG wget unzip tar gzip xz tmux ripgrep base-devel python python-pip \
-      -- fd clang xclip ;;
+      -- fd clang xclip perl ;;
   zypper)
     sudo zypper --non-interactive refresh || true
     pm_install git $CURL_PKG wget unzip tar gzip xz tmux ripgrep gcc gcc-c++ make python3 python3-pip \
-      -- fd clang-tools xclip ;;
+      -- fd clang-tools xclip perl ;;
   apk)
     sudo apk update
-    pm_install bash git curl wget unzip tar gzip xz tmux ripgrep build-base python3 py3-pip neovim nodejs npm \
+    pm_install bash git curl wget unzip tar gzip xz tmux perl ripgrep build-base python3 py3-pip neovim nodejs npm \
       -- fd clang-extra-tools lua-language-server tree-sitter-cli xclip ;;
 esac
 
