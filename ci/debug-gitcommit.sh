@@ -24,6 +24,7 @@ note "gitcommit source" "$(cd "$W/gitcommit" && ls -la src | head -20; echo; cat
 # 實驗：在背景跑，20 秒後抓診斷，最多等 limit 秒
 run_exp() { # title limit dir cmd...
   local title="$1" limit="$2" dir="$3"; shift 3
+  rm -f "${XDG_CACHE_HOME:-$HOME/.cache}/tree-sitter/lock/"*.lock # 前一個實驗被 kill 留下的 lock
   local start; start=$(date +%s)
   ( cd "$dir" && exec "$@" ) > "$W/out" 2>&1 &
   local pid=$! snap=""
