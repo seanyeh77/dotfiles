@@ -115,7 +115,7 @@ case "$PM" in
   apk)
     sudo apk update
     pm_install bash git curl wget unzip tar gzip xz tmux ripgrep build-base python3 py3-pip neovim nodejs npm \
-      -- fd clang-extra-tools tree-sitter-cli xclip ;;
+      -- fd clang-extra-tools lua-language-server tree-sitter-cli xclip ;;
 esac
 
 # Debian/Ubuntu 的 fd 叫 fdfind
@@ -165,7 +165,23 @@ if ! has tree-sitter && has npm; then
   [ -x /opt/node/bin/tree-sitter ] && sudo ln -sf /opt/node/bin/tree-sitter /usr/local/bin/tree-sitter
   hash -r
 fi
-has tree-sitter || warn "tree-sitter CLI missing, syntax highlighting parsers will not compile"
+# npm / GitHub release 的 tree-sitter binary 需要 glibc 2.39，舊系統（Debian 12、RHEL 9）
+# 會出現 "GLIBC_2.39 not found"，這時改用 cargo 從原始碼編譯（較慢，但任何 glibc 都能跑）
+ts_broken() { local v; v="$(tree-sitter --version 2>&1)" || return 0; case "$v" in *GLIBC*) return 0 ;; esac; return 1; }
+if has tree-sitter && ts_broken; then
+  log "tree-sitter binary needs newer glibc, building from source with cargo (takes a few minutes)"
+  if ! has cargo && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+    fetch https://sh.rustup.rs "$TMP/rustup.sh"
+    sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null
+  fi
+  CARGO="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
+  "$CARGO" install --locked tree-sitter-cli
+  sudo ln -sf "$HOME/.cargo/bin/tree-sitter" /usr/local/bin/tree-sitter
+  hash -r
+fi
+if ! has tree-sitter || ts_broken; then
+  warn "tree-sitter CLI missing or broken, syntax highlighting parsers will not compile"
+fi
 
 # ---------- dotfiles ----------
 log "Linking dotfiles"
@@ -197,7 +213,12 @@ with_timeout 600 nvim --headless "+Lazy! sync" +qa || warn "Lazy sync failed or 
 log "Installing LSP servers / formatters (Mason)"
 with_timeout 900 nvim --headless -c "MasonToolsInstallSync" -c "qa" || warn "Mason failed or timed out (network?), check :Mason"
 log "Installing treesitter parsers"
-with_timeout 900 nvim --headless -c "lua require('nvim-treesitter').install(_G.TS_LANGS):wait(600000)" -c "qa" \
-  || warn "parsers failed or timed out, check :checkhealth nvim-treesitter"
+mkdir -p "$HOME/.cache/tree-sitter/lock"
+# 平行編譯偶爾失敗（lock 競爭），第二輪只會重試沒裝成功的
+for round in 1 2; do
+  rm -f "$HOME/.cache/tree-sitter/lock/"*.lock # 上一輪中斷留下的 stale lock
+  with_timeout 900 nvim --headless -c "lua require('nvim-treesitter').install(_G.TS_LANGS):wait(600000)" -c "qa" \
+    || warn "treesitter round $round failed or timed out"
+done
 
 log "Done. 開 nvim 執行 :checkhealth 確認狀態"

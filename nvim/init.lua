@@ -28,11 +28,8 @@ o.scrolloff = 8
 local uname = vim.uv.os_uname()
 local is_linux_arm64 = uname.sysname == "Linux" and (uname.machine == "aarch64" or uname.machine == "arm64")
 local is_musl = vim.fn.filereadable("/etc/alpine-release") == 1
--- 系統已有 clangd（apt/dnf/apk 裝的）就用系統的；否則由 Mason 安裝
-local system_clangd = vim.fn.executable("clangd") == 1
-
--- LSP servers（lspconfig 名稱），由 Mason 安裝
-local mason_servers = {
+-- LSP servers（lspconfig 名稱），預設由 Mason 安裝
+local servers = {
   "pyright",       -- Python
   "bashls",        -- Bash / sh
   "lua_ls",        -- Lua
@@ -42,19 +39,36 @@ local mason_servers = {
   "yamlls",        -- YAML
   "dockerls",      -- Dockerfile
   "marksman",      -- Markdown
+  "clangd",        -- C / C++ / CUDA
 }
--- Mason 的 clangd 沒有 linux arm64 / musl 版本，這些平台只能用系統的
-if not system_clangd and not is_linux_arm64 and not is_musl then
-  table.insert(mason_servers, "clangd")
-end
 -- gopls 需要 go 才能安裝
-if vim.fn.executable("go") == 1 then table.insert(mason_servers, "gopls") end
+if vim.fn.executable("go") == 1 then table.insert(servers, "gopls") end
+
+-- 優先用系統套件的 server（server -> 執行檔名稱），系統有就不經 Mason
+--   clangd：Mason 沒有 linux arm64 / musl 版本，apt/dnf/apk 的 clangd 也比較穩
+--   lua_ls：Mason 的是 glibc binary，musl（Alpine）跑不了
+local prefer_system = { clangd = "clangd" }
+if is_musl then prefer_system.lua_ls = "lua-language-server" end
+
+-- Mason 沒有對應 binary 的平台：只能靠系統套件
+local mason_unavailable = {}
+if is_linux_arm64 or is_musl then mason_unavailable.clangd = true end
+
+local mason_servers, system_servers = {}, {}
+for _, s in ipairs(servers) do
+  local exe = prefer_system[s]
+  if exe and vim.fn.executable(exe) == 1 then
+    table.insert(system_servers, s)
+  elseif not mason_unavailable[s] then
+    table.insert(mason_servers, s)
+  end
+end
 
 -- Formatter（Mason 套件名稱）
 local mason_tools = { "stylua", "ruff", "shfmt", "prettier", "clang-format" }
 
 -- 給 CI 驗證用（ci/verify.lua 讀這份清單）
-_G.DOTFILES = { mason_servers = mason_servers, mason_tools = mason_tools, system_clangd = system_clangd }
+_G.DOTFILES = { mason_servers = mason_servers, mason_tools = mason_tools, system_servers = system_servers }
 
 -- Treesitter parser（語法高亮）
 _G.TS_LANGS = {
@@ -134,10 +148,8 @@ require("lazy").setup({
 vim.lsp.config("lua_ls", {
   settings = { Lua = { diagnostics = { globals = { "vim" } } } },
 })
--- 系統 clangd 不經 Mason，要手動 enable
-if system_clangd then
-  vim.lsp.enable("clangd")
-end
+-- 系統套件的 server 不經 Mason，要手動 enable
+for _, s in ipairs(system_servers) do vim.lsp.enable(s) end
 
 vim.diagnostic.config({ virtual_text = true, severity_sort = true })
 
