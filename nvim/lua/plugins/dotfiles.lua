@@ -29,6 +29,11 @@ return {
       if opts.servers.marksman ~= nil and opts.servers.marksman ~= false then
         local m = opts.servers.marksman == true and {} or opts.servers.marksman
         m.cmd_env = vim.tbl_extend("force", m.cmd_env or {}, { DOTNET_SYSTEM_GLOBALIZATION_INVARIANT = "1" })
+        -- Mason's marksman is a glibc binary: on musl (Alpine) only a system marksman can run
+        if is_musl then
+          m.mason = false
+          m.enabled = system_bin("marksman")
+        end
         opts.servers.marksman = m
       end
 

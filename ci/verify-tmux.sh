@@ -4,6 +4,8 @@
 set -uo pipefail
 failed=0
 check() { if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1: got '$2', want '$3'"; failed=$((failed + 1)); fi; }
+# Private socket dir: some distros (openSUSE) default to /run/tmux, which bare containers lack
+TMUX_TMPDIR="$(mktemp -d)"; export TMUX_TMPDIR
 T=(tmux -L dotfiles-verify)
 TERM=xterm-256color "${T[@]}" new-session -d -x 200 -y 50 || { echo "FAIL tmux could not start"; exit 1; }
 sleep 2
