@@ -19,13 +19,28 @@ has()  { command -v "$1" >/dev/null 2>&1; }
 # Running as root (e.g. in a container) may not have sudo
 if [ "$(id -u)" -eq 0 ]; then sudo() { "$@"; }; fi
 
-# Download with curl, falling back to wget
-fetch() { # fetch URL [OUTFILE]
+# Download with curl, falling back to wget; retry a few times so a network blip does not
+# abort the whole install
+fetch_once() { # fetch_once URL [OUTFILE]
   if has curl; then
-    if [ $# -ge 2 ]; then curl -fsSL -o "$2" "$1"; else curl -fsSL "$1"; fi
+    if [ $# -ge 2 ]; then curl -fsSL --connect-timeout 20 -o "$2" "$1"; else curl -fsSL --connect-timeout 20 "$1"; fi
   elif has wget; then
     if [ $# -ge 2 ]; then wget -qO "$2" "$1"; else wget -qO- "$1"; fi
   else die "Need curl or wget"; fi
+}
+fetch() { # fetch URL [OUTFILE]
+  local i
+  for i in 1 2 3 4; do
+    if [ $# -ge 2 ]; then
+      fetch_once "$@" && return 0
+    else
+      # Buffer stdout so a failed attempt does not leave partial output behind
+      local out
+      out="$(fetch_once "$@")" && { printf '%s\n' "$out"; return 0; }
+    fi
+    [ "$i" -lt 4 ] && { warn "download failed, retrying in $((i * 5)) s: $1"; sleep $((i * 5)); }
+  done
+  die "download failed after 4 attempts: $1"
 }
 
 # ---------- Detect OS / architecture ----------
