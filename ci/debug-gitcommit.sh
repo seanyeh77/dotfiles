@@ -34,10 +34,7 @@ run_exp() { # title limit dir cmd...
 $(ps -eo pid,ppid,stat,etime,wchan:24,args --forest | grep -v ' ps -eo' | tail -25)
 
 lock dir:
-$(ls -la "${XDG_CACHE_HOME:-$HOME/.cache}/tree-sitter/lock" 2>&1)
-
-strace 5 s:
-$(timeout 5 strace -f -tt -p "$pid" 2>&1 | tail -25)"
+$(ls -la "${XDG_CACHE_HOME:-$HOME/.cache}/tree-sitter/lock" 2>&1)"
     fi
     if [ "$el" -ge "$limit" ]; then
       pkill -KILL -P "$pid" 2>/dev/null; kill -KILL "$pid" 2>/dev/null
@@ -55,7 +52,18 @@ $(tail -15 "$W/out")
 $snap"
 }
 
-run_exp "A tree-sitter build gitcommit" 120 "$W/gitcommit" tree-sitter build -o parser.so
-run_exp "B cc parser.c directly"        180 "$W/gitcommit" cc -shared -fPIC -O2 -Isrc src/parser.c -o direct.so
-run_exp "C tree-sitter build lua"       120 "$W/lua"       tree-sitter build -o parser.so
+# 第 1 輪結果：A（tree-sitter build）卡在 cc1，B（cc -O2 直接編）5 s 完成
+# 第 2 輪：二分 tree-sitter 加的 flag，找出是哪個讓 gcc 12.2 卡住
+G="$W/gitcommit"
+BASE=(cc -shared -fPIC -O2 -Isrc src/parser.c -o t.so)
+run_exp "1 base"                          60 "$G" "${BASE[@]}"
+run_exp "2 base + -Wall"                  60 "$G" "${BASE[@]}" -Wall
+run_exp "3 base + -std=c11"               60 "$G" "${BASE[@]}" -std=c11
+run_exp "4 base + -ffunction/data-sections" 60 "$G" "${BASE[@]}" -ffunction-sections -fdata-sections
+run_exp "5 base + -Werror=implicit-fn-decl" 60 "$G" "${BASE[@]}" -Werror=implicit-function-declaration
+run_exp "6 base + -Wall -Wno-maybe-uninitialized" 60 "$G" "${BASE[@]}" -Wall -Wno-maybe-uninitialized
+run_exp "7 base + -Wall -Wno-array-bounds" 60 "$G" "${BASE[@]}" -Wall -Wno-array-bounds
+# 修法候選：用 CFLAGS 讓 tree-sitter build 本身避開
+run_exp "8 tree-sitter build CFLAGS=-Wno-maybe-uninitialized" 90 "$G" env CFLAGS=-Wno-maybe-uninitialized tree-sitter build -o p8.so
+run_exp "9 tree-sitter build CFLAGS=-O1"  90 "$G" env CFLAGS=-O1 tree-sitter build -o p9.so
 exit 0
