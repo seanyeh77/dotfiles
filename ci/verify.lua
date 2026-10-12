@@ -1,15 +1,14 @@
--- CI 驗證：nvim --headless -c "luafile ci/verify.lua"
--- 檢查 startup 錯誤、Mason 套件、Treesitter parser、LSP 是否真的 attach
--- 任一項失敗以 exit code 1 結束
+-- CI verification: nvim --headless -c "luafile ci/verify.lua"
+-- Checks startup errors, Mason packages, treesitter parsers, that LSP servers
+-- actually attach, and that formatting works. Exits with code 1 if any check fails.
 
 local results, failed = {}, 0
-local function check(name, ok, detail, optional)
-  local tag = ok and "PASS" or (optional and "WARN" or "FAIL")
-  if tag == "FAIL" then failed = failed + 1 end
-  table.insert(results, string.format("%s %-40s %s", tag, name, detail or ""))
+local function check(name, ok, detail)
+  if not ok then failed = failed + 1 end
+  table.insert(results, string.format("%s %-40s %s", ok and "PASS" or "FAIL", name, detail or ""))
 end
 
--- 1. startup 錯誤
+-- 1. Startup errors
 local errs = {}
 for _, m in ipairs(vim.split(vim.fn.execute("messages"), "\n")) do
   if m:match("E%d+:") or m:match("Error") then table.insert(errs, m) end
@@ -19,7 +18,7 @@ check("colorscheme loaded", vim.g.colors_name ~= nil, tostring(vim.g.colors_name
 check("blink.cmp loaded", (pcall(require, "blink.cmp")))
 check("conform loaded", (pcall(require, "conform")))
 
--- 2. Mason 套件
+-- 2. Mason packages
 local cfg = _G.DOTFILES
 check("init.lua exports DOTFILES", cfg ~= nil)
 if cfg then
@@ -36,17 +35,13 @@ if cfg then
   end
 end
 
--- 3. Treesitter parser
+-- 3. Treesitter parsers
 for _, lang in ipairs(_G.TS_LANGS or {}) do
   local ok, res = pcall(vim.treesitter.language.add, lang)
   check("treesitter: " .. lang, ok and res ~= nil and res ~= false, ok and "" or tostring(res))
 end
-for _, lang in ipairs(_G.TS_OPTIONAL or {}) do
-  local ok, res = pcall(vim.treesitter.language.add, lang)
-  check("treesitter (optional): " .. lang, ok and res ~= nil and res ~= false, "", true)
-end
 
--- 4. LSP 實際 attach（開檔後等 client 起來）
+-- 4. LSP servers attach (open a file, wait for the client)
 local tmp = vim.fn.tempname()
 vim.fn.mkdir(tmp, "p")
 local samples = {
@@ -72,14 +67,14 @@ for _, s in ipairs(samples) do
   check("lsp attach: " .. s.client, attached, s.file)
 end
 
--- 5. formatter 實際執行（python 用 ruff）
+-- 5. Formatting actually runs (python via ruff)
 vim.cmd("edit " .. vim.fn.fnameescape(tmp .. "/main.py"))
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "x=1" })
 local ok_fmt = pcall(require("conform").format, { timeout_ms = 20000 })
 local line = vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]
 check("format: ruff (python)", ok_fmt and line == "x = 1", line)
 
--- 報告（headless 下 print 不換行，直接寫 stdout）
+-- Report (print does not add newlines in headless mode, so write stdout directly)
 local function out(s) io.stdout:write(s .. "\n") end
 out("\n========== dotfiles verify ==========")
 out(string.format("nvim %s, %s %s", tostring(vim.version()), vim.uv.os_uname().sysname, vim.uv.os_uname().machine))

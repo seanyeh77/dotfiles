@@ -1,10 +1,10 @@
 -- ~/.config/nvim/init.lua
--- Neovim >= 0.11；macOS / Linux / WSL，amd64 / arm64 皆可用
+-- Neovim >= 0.11; macOS / Linux / WSL, amd64 / arm64
 
 vim.g.mapleader = " "
 vim.g.maplocalleader = " "
 
--- ========== 基本設定 ==========
+-- ========== Options ==========
 local o = vim.opt
 o.number = true
 o.relativenumber = true
@@ -24,11 +24,12 @@ o.splitright = true
 o.splitbelow = true
 o.scrolloff = 8
 
--- ========== 語言清單（要加語言改這裡） ==========
+-- ========== Languages (edit these lists to add a language) ==========
 local uname = vim.uv.os_uname()
 local is_linux_arm64 = uname.sysname == "Linux" and (uname.machine == "aarch64" or uname.machine == "arm64")
 local is_musl = vim.fn.filereadable("/etc/alpine-release") == 1
--- LSP servers（lspconfig 名稱），預設由 Mason 安裝
+
+-- LSP servers (lspconfig names), installed by Mason by default
 local servers = {
   "pyright",       -- Python
   "bashls",        -- Bash / sh
@@ -41,16 +42,16 @@ local servers = {
   "marksman",      -- Markdown
   "clangd",        -- C / C++ / CUDA
 }
--- gopls 需要 go 才能安裝
+-- gopls needs go to install
 if vim.fn.executable("go") == 1 then table.insert(servers, "gopls") end
 
--- 優先用系統套件的 server（server -> 執行檔名稱），系統有就不經 Mason
---   clangd：Mason 沒有 linux arm64 / musl 版本，apt/dnf/apk 的 clangd 也比較穩
---   lua_ls：Mason 的是 glibc binary，musl（Alpine）跑不了
+-- Servers that use the system package when present (server -> executable), bypassing Mason
+--   clangd: Mason has no linux arm64 / musl build, and distro clangd is reliable
+--   lua_ls: Mason ships a glibc binary that cannot run on musl (Alpine)
 local prefer_system = { clangd = "clangd" }
 if is_musl then prefer_system.lua_ls = "lua-language-server" end
 
--- Mason 沒有對應 binary 的平台：只能靠系統套件
+-- Platforms where Mason has no binary at all: only the system package can provide it
 local mason_unavailable = {}
 if is_linux_arm64 or is_musl then mason_unavailable.clangd = true end
 
@@ -64,22 +65,24 @@ for _, s in ipairs(servers) do
   end
 end
 
--- Formatter（Mason 套件名稱）
+-- Formatters (Mason package names)
 local mason_tools = { "stylua", "ruff", "shfmt", "prettier", "clang-format" }
 
--- 給 CI 驗證用（ci/verify.lua 讀這份清單）
+-- Exported for CI (ci/verify.lua reads these lists)
 _G.DOTFILES = { mason_servers = mason_servers, mason_tools = mason_tools, system_servers = system_servers }
 
--- Treesitter parser（語法高亮）
+-- Treesitter parsers (syntax highlighting)
 _G.TS_LANGS = {
   "c", "cpp", "cuda", "python", "bash", "lua", "rust", "go",
   "javascript", "typescript", "tsx", "json", "yaml", "toml",
   "dockerfile", "make", "cmake", "markdown", "markdown_inline",
-  "html", "css", "sql", "vim", "vimdoc", "diff",
+  "html", "css", "sql", "vim", "vimdoc", "diff", "gitcommit",
 }
--- 選用 parser：裝不起來只警告，不擋安裝
---   gitcommit：在 Debian 12 上編譯會卡住（原因未明），其他系統正常
-_G.TS_OPTIONAL = { "gitcommit" }
+
+-- Setting CFLAGS replaces tree-sitter's default compiler flags, which include -Wall.
+-- gcc 12.2 (Debian 12) spends minutes on -Wall for large generated parsers (e.g. gitcommit).
+-- install.sh sets the same default for headless installs.
+if not vim.env.CFLAGS or vim.env.CFLAGS == "" then vim.env.CFLAGS = "-O2" end
 
 -- ========== lazy.nvim ==========
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
@@ -90,19 +93,19 @@ end
 vim.opt.rtp:prepend(lazypath)
 
 require("lazy").setup({
-  -- 主題
+  -- Colorscheme
   { "folke/tokyonight.nvim", priority = 1000,
     config = function() vim.cmd.colorscheme("tokyonight") end },
 
-  -- 語法高亮
+  -- Syntax highlighting
   { "nvim-treesitter/nvim-treesitter", branch = "main", lazy = false, build = ":TSUpdate",
     config = function()
-      -- 只在互動模式補裝缺少的 parser；headless（install.sh、CI）由 install.sh 統一安裝，
-      -- 避免多個 nvim 同時編譯、中途被關掉留下 stale lock
+      -- Only install missing parsers in interactive sessions. Headless runs (install.sh, CI)
+      -- are handled by install.sh, so several nvim processes never compile at once or get
+      -- killed mid-build and leave stale locks behind.
       if #vim.api.nvim_list_uis() > 0 then
         local ts = require("nvim-treesitter")
         local installed = ts.get_installed()
-        -- 只補必要 parser；選用的由 install.sh 嘗試，避免每次開 nvim 都在背景卡一個編譯
         local missing = vim.tbl_filter(function(l) return not vim.list_contains(installed, l) end, _G.TS_LANGS)
         if #missing > 0 then ts.install(missing) end
       end
@@ -115,7 +118,7 @@ require("lazy").setup({
       })
     end },
 
-  -- LSP：Mason 負責安裝，lspconfig 提供設定，mason-lspconfig 自動 enable
+  -- LSP: Mason installs, lspconfig configures, mason-lspconfig enables automatically
   { "mason-org/mason.nvim", opts = {} },
   { "neovim/nvim-lspconfig" },
   { "mason-org/mason-lspconfig.nvim",
@@ -125,16 +128,16 @@ require("lazy").setup({
     dependencies = { "mason-org/mason-lspconfig.nvim" },
     opts = { ensure_installed = vim.list_extend(vim.deepcopy(mason_servers), mason_tools) } },
 
-  -- 自動補全
+  -- Completion
   { "saghen/blink.cmp", version = "1.*",
     opts = {
-      keymap = { preset = "default" }, -- <C-y> 確認, <C-n>/<C-p> 選擇
+      keymap = { preset = "default" }, -- <C-y> accept, <C-n>/<C-p> select
       completion = { documentation = { auto_show = true } },
       sources = { default = { "lsp", "path", "snippets", "buffer" } },
       fuzzy = { implementation = "prefer_rust_with_warning" },
     } },
 
-  -- 格式化
+  -- Formatting
   { "stevearc/conform.nvim",
     opts = {
       formatters_by_ft = {
@@ -149,23 +152,23 @@ require("lazy").setup({
       },
     } },
 
-  -- 實用小工具
+  -- Utilities
   { "nvim-telescope/telescope.nvim", dependencies = { "nvim-lua/plenary.nvim" } },
   { "lewis6991/gitsigns.nvim", opts = {} },
   { "folke/which-key.nvim", event = "VeryLazy", opts = {} },
 }, { checker = { enabled = false } })
 
--- ========== LSP 個別設定 ==========
+-- ========== Per-server LSP settings ==========
 vim.lsp.config("lua_ls", {
   settings = { Lua = { diagnostics = { globals = { "vim" } } } },
 })
--- 系統套件的 server 不經 Mason，要手動 enable
+-- Servers from system packages are not managed by Mason, so enable them explicitly
 for _, s in ipairs(system_servers) do vim.lsp.enable(s) end
 
 vim.diagnostic.config({ virtual_text = true, severity_sort = true })
 
--- ========== 快捷鍵 ==========
--- Neovim 0.11 內建：K 文件, grn 改名, gra code action, grr 參考, gri 實作
+-- ========== Keymaps ==========
+-- Built into Neovim 0.11: K hover, grn rename, gra code action, grr references, gri implementation
 local map = vim.keymap.set
 map("n", "gd", vim.lsp.buf.definition, { desc = "Go to definition" })
 map("n", "<leader>f", function() require("conform").format({ lsp_format = "fallback" }) end,

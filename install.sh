@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 一鍵安裝 nvim + tmux 開發環境
-#   OS：macOS、Debian/Ubuntu、Fedora/RHEL/Rocky、Arch、openSUSE、Alpine、WSL
-#   Arch：amd64 / arm64
-# 用法：bash <(curl -fsSL https://raw.githubusercontent.com/seanyeh77/dotfiles/main/install.sh)
-#   沒有 curl：bash <(wget -qO- https://raw.githubusercontent.com/seanyeh77/dotfiles/main/install.sh)
-# 重跑即更新（git pull + 外掛/LSP 同步），可重複執行
+# One-command installer for a Neovim + tmux development environment.
+#   OS:   macOS, Debian/Ubuntu, Fedora/RHEL/Rocky, Arch, openSUSE, Alpine, WSL
+#   Arch: amd64 / arm64
+# Usage:      bash <(curl -fsSL https://raw.githubusercontent.com/seanyeh77/dotfiles/main/install.sh)
+#   no curl:  bash <(wget -qO- https://raw.githubusercontent.com/seanyeh77/dotfiles/main/install.sh)
+# Safe to re-run: it updates the repo and syncs plugins / LSP servers.
 set -euo pipefail
 
 DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/seanyeh77/dotfiles}"
@@ -16,10 +16,10 @@ warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 has()  { command -v "$1" >/dev/null 2>&1; }
 
-# root（例如 container）不一定有 sudo
+# Running as root (e.g. in a container) may not have sudo
 if [ "$(id -u)" -eq 0 ]; then sudo() { "$@"; }; fi
 
-# 下載：curl 優先，沒有就用 wget
+# Download with curl, falling back to wget
 fetch() { # fetch URL [OUTFILE]
   if has curl; then
     if [ $# -ge 2 ]; then curl -fsSL -o "$2" "$1"; else curl -fsSL "$1"; fi
@@ -28,7 +28,7 @@ fetch() { # fetch URL [OUTFILE]
   else die "Need curl or wget"; fi
 }
 
-# ---------- 偵測 OS / 架構 ----------
+# ---------- Detect OS / architecture ----------
 OS="$(uname -s)"
 case "$(uname -m)" in
   x86_64|amd64)  ARCH=amd64; NVIM_ARCH=x86_64; NODE_ARCH=x64 ;;
@@ -48,14 +48,14 @@ esac
 grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=1 || IS_WSL=0
 log "OS: $OS ($PM)  Arch: $ARCH  WSL: $IS_WSL"
 
-# musl（Alpine）不能跑官方 glibc 版 nvim / node，改用套件管理器的版本
+# The official nvim / node builds need glibc: use the package manager on macOS and musl (Alpine)
 USE_PM_NVIM=0; USE_PM_NODE=0
 [ "$PM" = brew ] && { USE_PM_NVIM=1; USE_PM_NODE=1; }
 [ "$PM" = apk ]  && { USE_PM_NVIM=1; USE_PM_NODE=1; }
 
-# ---------- 系統套件 ----------
-# 必要：git curl unzip tar gzip（Mason 下載）、C compiler（treesitter parser）、tmux、ripgrep
-# 選用：fd、clangd、xclip，有就裝，沒有不中斷
+# ---------- System packages ----------
+# Required: git, curl, unzip, tar, gzip (Mason downloads), a C compiler (treesitter parsers), tmux, ripgrep
+# Optional: fd, clangd, xclip; installed when available, skipped with a warning otherwise
 pm_install() { # pm_install REQUIRED... -- OPTIONAL...
   local req=() opt=() seen=0
   for a in "$@"; do
@@ -85,6 +85,7 @@ pm_install() { # pm_install REQUIRED... -- OPTIONAL...
 }
 
 log "Installing system packages"
+# Skip curl when present: on RHEL, curl-minimal conflicts with the curl package
 CURL_PKG=curl; has curl && CURL_PKG=""
 case "$PM" in
   brew)
@@ -118,7 +119,7 @@ case "$PM" in
       -- fd clang-extra-tools lua-language-server tree-sitter-cli xclip ;;
 esac
 
-# Debian/Ubuntu 的 fd 叫 fdfind
+# Debian/Ubuntu ship fd as fdfind
 if ! has fd && has fdfind; then sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd; fi
 
 TMP="$(mktemp -d)"
@@ -126,7 +127,7 @@ trap 'rm -rf "$TMP"' EXIT
 sudo mkdir -p /usr/local/bin
 
 # ---------- Neovim ----------
-# glibc Linux：官方 release（distro 版本常太舊，設定需要 >= 0.11）
+# glibc Linux: official release (distro versions are often too old; the config needs >= 0.11)
 if [ "$USE_PM_NVIM" = 0 ]; then
   log "Installing Neovim (official release, $NVIM_ARCH)"
   fetch "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
@@ -135,13 +136,13 @@ if [ "$USE_PM_NVIM" = 0 ]; then
   sudo ln -sf "/opt/nvim-linux-${NVIM_ARCH}/bin/nvim" /usr/local/bin/nvim
 fi
 hash -r
-# 先存成變數再處理：`nvim --version | head -1` 在 pipefail 下可能因 SIGPIPE 中斷 (exit 141)
+# Capture first, then trim: `nvim --version | head -1` can die of SIGPIPE (exit 141) under pipefail
 NVIM_VER="$(nvim --version 2>/dev/null)" || die "nvim failed to run (glibc too old?). Try a newer OS release."
 NVIM_VER="${NVIM_VER%%$'\n'*}"
 NVIM_MINOR="$(printf '%s' "$NVIM_VER" | sed -E 's/.*v0\.([0-9]+).*/\1/')"
 [ "${NVIM_MINOR:-0}" -ge 11 ] || warn "$NVIM_VER < 0.11, config needs 0.11+"
 
-# ---------- Node.js（pyright、ts_ls、bashls、prettier 等需要） ----------
+# ---------- Node.js (needed by pyright, ts_ls, bashls, prettier, ...) ----------
 node_ok() { has node && [ "$(node -v | cut -d. -f1 | tr -d v)" -ge 18 ]; }
 if ! node_ok && [ "$USE_PM_NODE" = 0 ]; then
   log "Installing Node.js $NODE_MAJOR ($NODE_ARCH)"
@@ -157,7 +158,7 @@ if ! node_ok && [ "$USE_PM_NODE" = 0 ]; then
 fi
 node_ok || warn "Node.js >= 18 not found, JS-based LSPs (pyright, ts_ls...) will fail"
 
-# ---------- tree-sitter CLI（nvim-treesitter 編譯 parser 需要） ----------
+# ---------- tree-sitter CLI (nvim-treesitter uses it to compile parsers) ----------
 if ! has tree-sitter && has npm; then
   log "Installing tree-sitter CLI"
   if [ "$PM" = brew ]; then npm install -g tree-sitter-cli >/dev/null
@@ -165,8 +166,8 @@ if ! has tree-sitter && has npm; then
   [ -x /opt/node/bin/tree-sitter ] && sudo ln -sf /opt/node/bin/tree-sitter /usr/local/bin/tree-sitter
   hash -r
 fi
-# npm / GitHub release 的 tree-sitter binary 需要 glibc 2.39，舊系統（Debian 12、RHEL 9）
-# 會出現 "GLIBC_2.39 not found"，這時改用 cargo 從原始碼編譯（較慢，但任何 glibc 都能跑）
+# The prebuilt tree-sitter binary (npm / GitHub release) needs glibc 2.39. On older systems
+# (Debian 12, RHEL 9) it fails with "GLIBC_2.39 not found", so build it from source with cargo.
 ts_broken() { local v; v="$(tree-sitter --version 2>&1)" || return 0; case "$v" in *GLIBC*) return 0 ;; esac; return 1; }
 if has tree-sitter && ts_broken; then
   log "tree-sitter binary needs newer glibc, building from source with cargo (takes a few minutes)"
@@ -186,12 +187,14 @@ fi
 # ---------- dotfiles ----------
 log "Linking dotfiles"
 if [ -d "$DOTFILES_DIR/.git" ]; then
-  git -C "$DOTFILES_DIR" pull --ff-only || warn "git pull skipped (local changes or no remote)"
+  # safe.directory: allow running as a different user than the repo owner (e.g. root in a container)
+  git -c safe.directory="$DOTFILES_DIR" -C "$DOTFILES_DIR" pull --ff-only \
+    || warn "git pull skipped (local changes, detached HEAD or no remote)"
 else
   git clone "$DOTFILES_REPO" "$DOTFILES_DIR"
 fi
 
-link() { # 既有設定先備份，不直接覆蓋
+link() { # back up existing config instead of overwriting it
   local src="$1" dst="$2"
   mkdir -p "$(dirname "$dst")"
   if [ -e "$dst" ] && [ ! -L "$dst" ]; then mv "$dst" "$dst.bak.$(date +%s)"; fi
@@ -200,33 +203,32 @@ link() { # 既有設定先備份，不直接覆蓋
 link "$DOTFILES_DIR/nvim"      "$HOME/.config/nvim"
 link "$DOTFILES_DIR/tmux.conf" "$HOME/.tmux.conf"
 
-# ---------- tmux 外掛 ----------
+# ---------- tmux plugins ----------
 log "Installing tmux plugins"
 [ -d "$HOME/.tmux/plugins/tpm" ] || git clone --depth 1 https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm"
 "$HOME/.tmux/plugins/tpm/bin/install_plugins" >/dev/null || warn "tpm install failed, press prefix + I inside tmux"
 
-# ---------- nvim 外掛、LSP、treesitter parser（headless 一次裝完） ----------
-# 網路有問題時避免無限等待（macOS 沒有 timeout 就直接跑）
+# ---------- nvim plugins, LSP servers, treesitter parsers (all headless) ----------
+# Bound every step so a network problem cannot hang forever (macOS has no timeout: run as is)
 with_timeout() { local s="$1"; shift; if has timeout; then timeout "$s" "$@"; else "$@"; fi; }
 log "Installing nvim plugins (Lazy)"
 with_timeout 600 nvim --headless "+Lazy! sync" +qa || warn "Lazy sync failed or timed out, run :Lazy sync"
 log "Installing LSP servers / formatters (Mason)"
 with_timeout 900 nvim --headless -c "MasonToolsInstallSync" -c "qa" || warn "Mason failed or timed out (network?), check :Mason"
+
 log "Installing treesitter parsers"
+# Setting CFLAGS replaces tree-sitter's default compiler flags, which include -Wall.
+# gcc 12.2 (Debian 12) spends minutes on -Wall for large generated parsers such as gitcommit;
+# with CFLAGS set the same parser builds in seconds. init.lua sets the same default.
+export CFLAGS="${CFLAGS:--O2}"
 mkdir -p "$HOME/.cache/tree-sitter/lock"
-# 平行編譯偶爾失敗（lock 競爭），第二輪只會重試沒裝成功的
+# Parallel builds occasionally fail; the second round only retries what is still missing
 for round in 1 2; do
-  rm -f "$HOME/.cache/tree-sitter/lock/"*.lock # 上一輪中斷留下的 stale lock
+  rm -f "$HOME/.cache/tree-sitter/lock/"*.lock # stale locks left by an interrupted round
   with_timeout 300 nvim --headless -c "lua require('nvim-treesitter').install(_G.TS_LANGS):wait(280000)" -c "qa" \
     || warn "treesitter round $round failed or timed out"
-done
-# 選用 parser：每個最多 90 秒，失敗只警告
-for lang in $(nvim --headless -c "lua io.stdout:write(table.concat(_G.TS_OPTIONAL or {},' '))" -c qa 2>/dev/null); do
-  rm -f "$HOME/.cache/tree-sitter/lock/$lang"-*.lock
-  with_timeout 90 nvim --headless -c "lua require('nvim-treesitter').install({'$lang'}):wait(80000)" -c "qa" >/dev/null 2>&1 \
-    || warn "optional treesitter parser '$lang' failed (only affects its syntax highlighting)"
 done
 MISSING_TS="$(nvim --headless -c "lua local i=require('nvim-treesitter').get_installed(); local m={}; for _,l in ipairs(_G.TS_LANGS) do if not vim.list_contains(i,l) then table.insert(m,l) end end; io.stdout:write(table.concat(m,' '))" -c qa 2>/dev/null)" || true
 [ -z "$MISSING_TS" ] || warn "treesitter parsers not installed: $MISSING_TS"
 
-log "Done. 開 nvim 執行 :checkhealth 確認狀態"
+log "Done. Open nvim and run :checkhealth to verify"

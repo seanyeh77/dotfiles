@@ -5,10 +5,10 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    - cron: "0 2 * * 1" # 每週一 10:00 (UTC+8)，抓上游（nvim / 外掛 / LSP）更新造成的問題
+    - cron: "0 2 * * 1" # Mondays 02:00 UTC: catch breakage from upstream nvim / plugin / LSP updates
 
 jobs:
-  # 各 OS / 架構的原生 runner
+  # Native runners for each OS / architecture
   native:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -36,7 +36,7 @@ jobs:
         run: bash ci/annotate.sh "$RUNNER_TEMP"
         shell: bash
 
-  # 其他 distro 用 container 跑（都以 root 執行，順便測沒有 sudo 的情況）
+  # Other distros run in containers (as root, which also covers the no-sudo path)
   distro:
     name: ${{ matrix.image }}
     runs-on: ubuntu-24.04
@@ -53,9 +53,9 @@ jobs:
           - { image: "rockylinux:9" }
           - { image: "archlinux:latest" }
           - { image: "opensuse/tumbleweed" }
-          - { image: "alpine:latest", experimental: true } # musl，部分 Mason binary 無法執行
+          - { image: "alpine:latest", experimental: true } # musl: some Mason binaries cannot run
     steps:
-      # checkout 需要 git（否則沒有 .git，install.sh 會嘗試重新 clone）
+      # checkout needs git, otherwise there is no .git and install.sh would try to clone again
       - name: bootstrap git
         shell: sh
         run: |
@@ -80,7 +80,7 @@ jobs:
         run: bash ci/annotate.sh "$RUNNER_TEMP"
         shell: bash
 
-  # 測真正給使用者用的那行指令（只在 main 跑，因為 raw 網址抓的是 main）
+  # Test the exact command users run (main only, since the raw URL serves main)
   one-liner:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
