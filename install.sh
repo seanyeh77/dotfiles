@@ -217,7 +217,7 @@ mkdir -p "$HOME/.cache/tree-sitter/lock"
 # 平行編譯偶爾失敗（lock 競爭），第二輪只會重試沒裝成功的
 for round in 1 2; do
   rm -f "$HOME/.cache/tree-sitter/lock/"*.lock # 上一輪中斷留下的 stale lock
-  with_timeout 900 nvim --headless -c "lua require('nvim-treesitter').install(_G.TS_LANGS):wait(600000)" -c "qa" \
+  with_timeout 300 nvim --headless -c "lua require('nvim-treesitter').install(_G.TS_LANGS):wait(280000)" -c "qa" \
     || warn "treesitter round $round failed or timed out"
 done
 MISSING_TS="$(nvim --headless -c "lua local i=require('nvim-treesitter').get_installed(); local m={}; for _,l in ipairs(_G.TS_LANGS) do if not vim.list_contains(i,l) then table.insert(m,l) end end; io.stdout:write(table.concat(m,' '))" -c qa 2>/dev/null)" || true

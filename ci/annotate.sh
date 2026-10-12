@@ -17,7 +17,12 @@ for name in install verify; do
   # 2. 警告 / 錯誤行（install.sh 的 !! 與 xx）
   warns="$(strip_ansi < "$f" | grep -aE '^(!!|xx) |E[0-9]+:|[Ee]rror' | grep -av 'nvim-treesitter/install' | tail -20 || true)"
   [ -n "$warns" ] && echo "::warning title=$name warnings::$(encode "$warns")"
-  # 3. 最後 40 行
+  # 3. 開始編譯但沒有完成的 parser（卡住時看這個）
+  started="$(strip_ansi < "$f" | grep -ao 'install/[a-z_]*\]: Compiling' | sed -E 's#install/([a-z_]*).*#\1#' | sort -u)"
+  done_="$(strip_ansi < "$f" | grep -ao 'install/[a-z_]*\]: Language installed' | sed -E 's#install/([a-z_]*).*#\1#' | sort -u)"
+  stuck="$(comm -23 <(printf '%s\n' "$started") <(printf '%s\n' "$done_") | tr '\n' ' ')"
+  [ -n "${stuck// }" ] && echo "::error title=$name parsers never finished::$stuck"
+  # 4. 最後 40 行
   echo "::error title=$name tail::$(encode "$(strip_ansi < "$f" | tail -40)")"
 done
 exit 0

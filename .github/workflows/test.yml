@@ -23,6 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: install.sh
+        timeout-minutes: 25
         run: bash install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
         shell: bash -o pipefail {0}
         env:
@@ -31,7 +32,7 @@ jobs:
         run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
         shell: bash -o pipefail {0}
       - name: report failure
-        if: failure()
+        if: failure() || cancelled()
         run: bash ci/annotate.sh "$RUNNER_TEMP"
         shell: bash
 
@@ -66,6 +67,7 @@ jobs:
           fi
       - uses: actions/checkout@v5
       - name: install.sh
+        timeout-minutes: 25
         run: bash install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
         shell: bash -o pipefail {0}
         env:
@@ -74,7 +76,7 @@ jobs:
         run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
         shell: bash -o pipefail {0}
       - name: report failure
-        if: failure()
+        if: failure() || cancelled()
         run: bash ci/annotate.sh "$RUNNER_TEMP"
         shell: bash
 
@@ -85,6 +87,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: curl | bash
+        timeout-minutes: 25
         run: bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh) 2>&1 | tee "$RUNNER_TEMP/install.log"
         shell: bash -o pipefail {0}
         env:
@@ -93,5 +96,5 @@ jobs:
         run: nvim --headless -c "luafile $HOME/dotfiles/ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
         shell: bash -o pipefail {0}
       - name: report failure
-        if: failure()
+        if: failure() || cancelled()
         run: bash "$HOME/dotfiles/ci/annotate.sh" "$RUNNER_TEMP"
