@@ -24,6 +24,14 @@ return {
       -- Bash is not part of LazyVim's defaults
       opts.servers.bashls = opts.servers.bashls or {}
 
+      -- marksman is a .NET binary that needs ICU at startup, which minimal images (Fedora,
+      -- RHEL, openSUSE, Alpine) lack; it does not need culture data, so run it without
+      if opts.servers.marksman ~= nil and opts.servers.marksman ~= false then
+        local m = opts.servers.marksman == true and {} or opts.servers.marksman
+        m.cmd_env = vim.tbl_extend("force", m.cmd_env or {}, { DOTNET_SYSTEM_GLOBALIZATION_INVARIANT = "1" })
+        opts.servers.marksman = m
+      end
+
       -- clangd: prefer the OS package (reliable, and Mason has no linux arm64 / musl build)
       local clangd = opts.servers.clangd
       if clangd ~= nil and clangd ~= false then
@@ -47,15 +55,24 @@ return {
     end,
   },
 
-  -- Extra Mason packages: servers Claude Code's language-server plugins look for on PATH
-  -- (shell/env.sh adds Mason's bin to PATH)
+  -- Mason packages
   {
     "mason-org/mason.nvim",
     opts = function(_, opts)
       opts.ensure_installed = opts.ensure_installed or {}
+      -- codelldb is the Rust/C debugger for LazyVim's DAP extra, which is not enabled
+      opts.ensure_installed = vim.tbl_filter(function(name)
+        return name ~= "codelldb"
+      end, opts.ensure_installed)
+      -- Servers Claude Code's language-server plugins look for on PATH (shell/env.sh adds Mason's bin)
       vim.list_extend(opts.ensure_installed, { "typescript-language-server" })
       if not is_musl then
         table.insert(opts.ensure_installed, "rust-analyzer")
+      end
+      _G.DOTFILES.mason_tools = vim.deepcopy(opts.ensure_installed)
+      -- During install.sh, headless.lua is the only installer (see the treesitter note below)
+      if vim.env.DOTFILES_HEADLESS_INSTALL == "1" then
+        opts.ensure_installed = {}
       end
     end,
   },

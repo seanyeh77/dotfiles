@@ -38,7 +38,11 @@ function M.collect()
   local servers = {}
   local setup = mlsp.setup
   mlsp.setup = function(o)
-    servers = vim.deepcopy(o and o.ensure_installed or {})
+    o = o or {}
+    servers = vim.deepcopy(o.ensure_installed or {})
+    if vim.env.DOTFILES_HEADLESS_INSTALL == "1" then
+      o.ensure_installed = {} -- install them ourselves, so only one installer runs
+    end
     return setup(o)
   end
   lazy.load({ plugins = { "mason.nvim", "nvim-lspconfig", "nvim-treesitter" } })
@@ -52,7 +56,8 @@ function M.collect()
       table.insert(mason, name)
     end
   end
-  for _, tool in ipairs(LazyVim.opts("mason.nvim").ensure_installed or {}) do
+  LazyVim.opts("mason.nvim") -- resolves opts, which records the full list (plugins/dotfiles.lua)
+  for _, tool in ipairs(_G.DOTFILES.mason_tools or {}) do
     add(tool)
   end
   for _, server in ipairs(servers) do
@@ -80,12 +85,18 @@ local function install_mason(names, timeout_ms)
       pending[name] = pkg
     end
   end
-  mr:on("package:install:failed", function(pkg)
+  M._on_failed = function(pkg)
     if pending[pkg.name] then
       pending[pkg.name] = nil
       table.insert(failed, pkg.name)
     end
-  end)
+  end
+  if not M._listening then
+    M._listening = true
+    mr:on("package:install:failed", function(pkg)
+      M._on_failed(pkg)
+    end)
+  end
   for name, pkg in pairs(pending) do
     if not pkg:is_installing() then -- LazyVim may already have started it
       out("  mason: installing " .. name)
@@ -148,6 +159,13 @@ function M.install()
     end
     out("Mason packages: " .. table.concat(want.mason, " "))
     local failed = install_mason(want.mason, 15 * 60 * 1000)
+    if #failed > 0 then -- one retry for transient download errors
+      local retry = vim.tbl_map(function(f)
+        return (f:gsub(" %(.*%)$", ""))
+      end, failed)
+      out("  mason: retrying " .. table.concat(retry, " "))
+      failed = install_mason(retry, 10 * 60 * 1000)
+    end
     out("Treesitter parsers: " .. table.concat(want.ts, " "))
     local missing = install_ts(want.ts, 5 * 60 * 1000)
     if #failed > 0 then
