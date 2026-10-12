@@ -1,5 +1,5 @@
 -- ~/.config/nvim/init.lua
--- Neovim >= 0.11, amd64 / arm64 皆可用
+-- Neovim >= 0.11；macOS / Linux / WSL，amd64 / arm64 皆可用
 
 vim.g.mapleader = " "
 vim.g.maplocalleader = " "
@@ -25,7 +25,11 @@ o.splitbelow = true
 o.scrolloff = 8
 
 -- ========== 語言清單（要加語言改這裡） ==========
-local is_arm64 = vim.uv.os_uname().machine:match("aarch64") or vim.uv.os_uname().machine:match("arm64")
+local uname = vim.uv.os_uname()
+local is_linux_arm64 = uname.sysname == "Linux" and (uname.machine == "aarch64" or uname.machine == "arm64")
+local is_musl = vim.fn.filereadable("/etc/alpine-release") == 1
+-- 系統已有 clangd（apt/dnf/apk 裝的）就用系統的；否則由 Mason 安裝
+local system_clangd = vim.fn.executable("clangd") == 1
 
 -- LSP servers（lspconfig 名稱），由 Mason 安裝
 local mason_servers = {
@@ -39,8 +43,10 @@ local mason_servers = {
   "dockerls",      -- Dockerfile
   "marksman",      -- Markdown
 }
--- clangd 在 Mason 沒有 linux arm64 binary，arm64 改用系統的 clangd
-if not is_arm64 then table.insert(mason_servers, "clangd") end
+-- Mason 的 clangd 沒有 linux arm64 / musl 版本，這些平台只能用系統的
+if not system_clangd and not is_linux_arm64 and not is_musl then
+  table.insert(mason_servers, "clangd")
+end
 -- gopls 需要 go 才能安裝
 if vim.fn.executable("go") == 1 then table.insert(mason_servers, "gopls") end
 
@@ -125,8 +131,8 @@ require("lazy").setup({
 vim.lsp.config("lua_ls", {
   settings = { Lua = { diagnostics = { globals = { "vim" } } } },
 })
--- arm64：用系統 clangd（install.sh 會用 apt/dnf 裝）
-if is_arm64 and vim.fn.executable("clangd") == 1 then
+-- 系統 clangd 不經 Mason，要手動 enable
+if system_clangd then
   vim.lsp.enable("clangd")
 end
 

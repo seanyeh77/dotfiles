@@ -1,6 +1,18 @@
 # dotfiles
 
-Neovim + tmux 開發環境，一個指令裝好。支援 amd64 / arm64，Debian/Ubuntu、Fedora/RHEL、Arch。
+Neovim + tmux 開發環境，一個指令裝好。
+
+| OS | 套件管理器 | 備註 |
+| --- | --- | --- |
+| macOS | Homebrew | 沒有 brew 會自動安裝 |
+| Debian / Ubuntu | apt | |
+| Fedora / RHEL / Rocky / Alma | dnf / yum | ripgrep、fd 在 RHEL 需要 EPEL，沒有會略過 |
+| Arch | pacman | |
+| openSUSE | zypper | |
+| Alpine | apk | musl，部分 Mason 工具無法使用（best effort） |
+| Windows | WSL | 在 WSL 裡跑，視同 Linux；Windows 原生不支援 |
+
+架構支援 amd64 / arm64。glibc Linux 一律用官方 Neovim release，macOS / Alpine 用套件管理器的版本。設定需要 Neovim 0.11 以上。
 
 ## 安裝 / 更新
 
