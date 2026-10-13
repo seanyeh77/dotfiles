@@ -50,7 +50,7 @@ jobs:
         shell: bash
         run: |
           printf '#!/usr/bin/env bash\necho "ran in bash $BASH_VERSION"\n' > "$RUNNER_TEMP/fake.sh"
-          for sh in zsh sh; do
+          for sh in zsh sh "bash --posix"; do
             out="$(cat install.sh | DOTFILES_URL="file://$RUNNER_TEMP/fake.sh" $sh 2>&1 | tail -1)"
             echo "$sh: $out"; case "$out" in "ran in bash"*) ;; *) exit 1 ;; esac
           done

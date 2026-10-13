@@ -8,8 +8,10 @@
 
 # This is a bash script. When started by another shell (`curl ... | zsh`, `| sh`), hand over
 # to bash: from a file run it again with bash, from a pipe download it again into bash.
-# Written in plain POSIX sh so zsh and dash can run these lines before handing over.
-if [ -z "${BASH_VERSION:-}" ]; then
+# On macOS, sh is bash in POSIX mode, which sets BASH_VERSION but changes behaviour, so it
+# hands over too. Written in plain POSIX sh so zsh and dash can run these lines first.
+case ":${SHELLOPTS:-}:" in *:posix:*) DOTFILES_POSIX=1 ;; *) DOTFILES_POSIX=0 ;; esac
+if [ -z "${BASH_VERSION:-}" ] || [ "$DOTFILES_POSIX" = 1 ]; then
   DOTFILES_URL="${DOTFILES_URL:-https://seanyeh77.github.io/dotfiles}"
   if ! command -v bash >/dev/null 2>&1; then
     echo "xx this installer needs bash; install bash and run it again" >&2; exit 1
