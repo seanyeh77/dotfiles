@@ -22,8 +22,10 @@ jobs:
           - { name: macos arm64,        os: macos-latest }
     steps:
       - uses: actions/checkout@v5
+      # Write the whole PATH: in container jobs GITHUB_PATH rebuilds PATH from the image config,
+      # and images without a PATH entry (openSUSE Tumbleweed) end up with only ~/.local/bin
       - name: put ~/.local/bin on PATH (steps do not read ~/.bashrc)
-        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        run: echo "PATH=$HOME/.local/bin:$PATH" >> "$GITHUB_ENV"
         shell: bash
       - name: install.sh
         timeout-minutes: 25
@@ -93,8 +95,10 @@ jobs:
           elif command -v apk     >/dev/null; then apk add git bash
           fi
       - uses: actions/checkout@v5
+      # Write the whole PATH: in container jobs GITHUB_PATH rebuilds PATH from the image config,
+      # and images without a PATH entry (openSUSE Tumbleweed) end up with only ~/.local/bin
       - name: put ~/.local/bin on PATH (steps do not read ~/.bashrc)
-        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        run: echo "PATH=$HOME/.local/bin:$PATH" >> "$GITHUB_ENV"
         shell: bash
       - name: install.sh
         timeout-minutes: 25
@@ -183,9 +187,21 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      # Write the whole PATH: in container jobs GITHUB_PATH rebuilds PATH from the image config,
+      # and images without a PATH entry (openSUSE Tumbleweed) end up with only ~/.local/bin
       - name: put ~/.local/bin on PATH (steps do not read ~/.bashrc)
-        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        run: echo "PATH=$HOME/.local/bin:$PATH" >> "$GITHUB_ENV"
         shell: bash
+      # Pages deploys install.sh a minute or so after the push; test the version from this commit
+      - name: wait until the short URL serves this commit's install.sh
+        shell: bash
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh" -o want.sh
+          for i in $(seq 1 40); do
+            curl -fsSL "${{ github.repository_owner }}.github.io/dotfiles?t=$(date +%s)" -o got.sh && cmp -s want.sh got.sh && exit 0
+            sleep 15
+          done
+          echo "::error::short URL still serves an older install.sh after 10 min"; exit 1
       - name: curl | bash
         timeout-minutes: 25
         run: curl -fsSL ${{ github.repository_owner }}.github.io/dotfiles | bash 2>&1 | tee "$RUNNER_TEMP/install.log"
