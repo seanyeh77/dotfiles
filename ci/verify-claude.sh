@@ -22,11 +22,18 @@ for pair in pyright-lsp:pyright-langserver clangd-lsp:clangd typescript-lsp:type
   case "$list" in *"${pair%%:*}@claude-plugins-official"*) r=0 ;; *) r=1 ;; esac
   check "plugin ${pair%%:*}" $r
 done
+# Arguments: plugin@marketplace, or skill:NAME for a skill linked into ~/.claude/skills
 for p in "$@"; do
-  case "$list" in *"$p@claude-plugins-official"*) r=0 ;; *) r=1 ;; esac
-  check "plugin $p" $r
+  case "$p" in
+    skill:*)
+      n="${p#skill:}"
+      [ -f "$HOME/.claude/skills/$n/SKILL.md" ]; check "skill $n" $? ;;
+    *)
+      case "$list" in *"$p"*) r=0 ;; *) r=1 ;; esac
+      check "plugin $p" $r ;;
+  esac
 done
 echo "========== claude: $failed failed =========="
 # Summary as an annotation, readable from the run page without downloading logs
-[ -n "${GITHUB_ACTIONS:-}" ] && echo "::notice title=claude plugins::$(claude --version 2>/dev/null) | $(printf '%s\n' "$list" | grep -o '[a-z-]*@claude-plugins-official' | sort -u | tr '\n' ' ')"
+[ -n "${GITHUB_ACTIONS:-}" ] && echo "::notice title=claude plugins::$(claude --version 2>/dev/null) | $(printf '%s\n' "$list" | grep -o '[a-z0-9-]*@[a-z-]*' | sort -u | tr '\n' ' ')"
 exit "$failed"

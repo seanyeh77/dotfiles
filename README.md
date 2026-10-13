@@ -14,7 +14,9 @@ Run the same command again to update.
 
 - **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine and WSL, on amd64 or arm64
 - **Font**: use a [Nerd Font](https://www.nerdfonts.com) in your local terminal, or icons show as boxes
-- **Claude Code**: the installer asks whether to install it and which plugins to add
+- **Claude Code**: the installer asks whether to install it and which plugins to add (press Enter for all):
+  - Workflow: commit-commands, code-review, feature-dev, security-guidance, code-simplifier, claude-md-management, superpowers, context7
+  - Frontend: frontend-design, playwright, design, vercel-react-best-practices
 
 ## Neovim
 

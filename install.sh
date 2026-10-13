@@ -75,12 +75,20 @@ USE_PM_NVIM=0; USE_PM_NODE=0
 # ---------- Questions (asked up front so the rest runs unattended) ----------
 # INSTALL_CLAUDE=1/0 and CLAUDE_PLUGINS="a b" preset the answers; with no terminal
 # (CI, cron) and nothing preset, Claude Code is skipped.
+# name|source|description; source is a marketplace (official, knowledge-work) or "skill"
 CLAUDE_WORKFLOW_PLUGINS=(
-  "commit-commands|commit, push and open pull requests"
-  "code-review|review your changes before committing"
-  "feature-dev|guided feature development workflow"
-  "security-guidance|warn about security issues while Claude edits"
-  "frontend-design|distinctive, production-grade web UI design"
+  "commit-commands|official|commit, push and open pull requests"
+  "code-review|official|review your changes before committing"
+  "feature-dev|official|guided feature development workflow"
+  "security-guidance|official|warn about security issues while Claude edits"
+  "code-simplifier|official|simplify code Claude just changed, same behaviour"
+  "claude-md-management|official|keep the project's CLAUDE.md notes up to date"
+  "superpowers|official|brainstorm, TDD and debugging workflows (third-party)"
+  "context7|official|up-to-date library docs for Claude (third-party)"
+  "frontend-design|official|distinctive, production-grade web UI design"
+  "playwright|official|let Claude open a browser and see the page (third-party)"
+  "design|knowledge-work|design critique, accessibility and UX writing"
+  "vercel-react-best-practices|skill|React / Next.js performance rules (Vercel)"
 )
 HAS_TTY=0; ( exec </dev/tty ) 2>/dev/null && HAS_TTY=1
 ask() { # ask PROMPT DEFAULT -> REPLY
@@ -103,9 +111,9 @@ if [ "$INSTALL_CLAUDE" = 1 ] && [ -z "${CLAUDE_PLUGINS+set}" ]; then
   for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do CLAUDE_PLUGINS="$CLAUDE_PLUGINS ${e%%|*}"; done
   if [ "$HAS_TTY" = 1 ]; then
     {
-      echo "   Claude Code plugins (Anthropic's official marketplace):"
+      echo "   Claude Code plugins and skills:"
       i=1; for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do
-        printf '     %d) %-18s %s\n' "$i" "${e%%|*}" "${e#*|}"; i=$((i + 1))
+        printf '    %2d) %-28s %s\n' "$i" "${e%%|*}" "${e##*|}"; i=$((i + 1))
       done
       echo "   Language-server plugins are added automatically for the languages nvim supports."
     } > /dev/tty
@@ -347,16 +355,42 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
     MP=claude-plugins-official
     claude plugin marketplace add "anthropics/$MP" >/dev/null 2>&1 || true
     INSTALLED_PLUGINS="$(claude plugin list 2>/dev/null || true)"
-    claude_plugin() { # claude_plugin NAME
-      case "$INSTALLED_PLUGINS" in *"$1@$MP"*) return 0 ;; esac
-      claude plugin install "$1@$MP" >/dev/null 2>&1 && log "  plugin: $1" || warn "plugin install failed: $1"
+    claude_plugin() { # claude_plugin NAME [MARKETPLACE]
+      local mp="${2:-$MP}"
+      case "$INSTALLED_PLUGINS" in *"$1@$mp"*) return 0 ;; esac
+      claude plugin install "$1@$mp" >/dev/null 2>&1 && log "  plugin: $1" || warn "plugin install failed: $1@$mp"
+    }
+    # A skill that is not packaged as a plugin: clone its repo and link the skill folder into
+    # ~/.claude/skills, where Claude Code picks up user skills. Re-runs update the clone.
+    claude_skill() { # claude_skill NAME REPO PATH_IN_REPO
+      local dir="${XDG_DATA_HOME:-$HOME/.local/share}/claude-skills/${2//\//_}"
+      if [ -d "$dir/.git" ]; then git -C "$dir" pull -q --ff-only || warn "could not update skill $1"
+      else git clone -q --depth 1 "https://github.com/$2" "$dir" || { warn "skill install failed: $1"; return; }; fi
+      mkdir -p "$HOME/.claude/skills"
+      ln -sfn "$dir/$3" "$HOME/.claude/skills/$1" && log "  skill: $1"
     }
     # Language-server plugins: one per nvim language whose server is on PATH (Mason's bin is)
     for pair in pyright-lsp:pyright-langserver clangd-lsp:clangd typescript-lsp:typescript-language-server \
                 rust-analyzer-lsp:rust-analyzer lua-lsp:lua-language-server gopls-lsp:gopls; do
       if has "${pair#*:}"; then claude_plugin "${pair%%:*}"; fi
     done
-    for p in ${CLAUDE_PLUGINS:-}; do claude_plugin "$p"; done
+    for p in ${CLAUDE_PLUGINS:-}; do
+      src=official
+      for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do
+        if [ "${e%%|*}" = "$p" ]; then src="${e#*|}"; src="${src%%|*}"; fi
+      done
+      case "$src" in
+        official) claude_plugin "$p" ;;
+        knowledge-work)
+          claude plugin marketplace add anthropics/knowledge-work-plugins >/dev/null 2>&1 || true
+          claude_plugin "$p" knowledge-work-plugins ;;
+        skill)
+          case "$p" in
+            vercel-react-best-practices) claude_skill "$p" vercel-labs/agent-skills skills/react-best-practices ;;
+            *) warn "unknown skill: $p" ;;
+          esac ;;
+      esac
+    done
     log "Claude Code ready: run 'claude' (or prefix + A in tmux) and log in on first start"
   else
     warn "Claude Code install failed; see https://code.claude.com/docs/en/troubleshoot-install"

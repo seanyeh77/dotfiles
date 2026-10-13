@@ -29,7 +29,10 @@ jobs:
         env:
           DOTFILES_DIR: ${{ github.workspace }}
           INSTALL_CLAUDE: ${{ matrix.claude && '1' || '0' }}
-          CLAUDE_PLUGINS: commit-commands frontend-design
+          CLAUDE_PLUGINS: >-
+            commit-commands code-review feature-dev security-guidance code-simplifier
+            claude-md-management superpowers context7 frontend-design playwright design
+            vercel-react-best-practices
       - name: verify
         run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
         shell: bash -o pipefail {0}
@@ -38,7 +41,15 @@ jobs:
         shell: bash -o pipefail {0}
       - name: verify claude
         if: matrix.claude
-        run: bash ci/verify-claude.sh commit-commands frontend-design 2>&1 | tee "$RUNNER_TEMP/verify-claude.log"
+        run: >-
+          bash ci/verify-claude.sh
+          commit-commands@claude-plugins-official code-review@claude-plugins-official
+          feature-dev@claude-plugins-official security-guidance@claude-plugins-official
+          code-simplifier@claude-plugins-official claude-md-management@claude-plugins-official
+          superpowers@claude-plugins-official context7@claude-plugins-official
+          frontend-design@claude-plugins-official playwright@claude-plugins-official
+          design@knowledge-work-plugins skill:vercel-react-best-practices
+          2>&1 | tee "$RUNNER_TEMP/verify-claude.log"
         shell: bash -o pipefail {0}
       - name: report failure
         if: failure() || cancelled()
