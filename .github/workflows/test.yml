@@ -101,7 +101,9 @@ jobs:
           if   command -v apt-get >/dev/null; then apt-get update && apt-get install -y git
           elif command -v dnf     >/dev/null; then dnf install -y git
           elif command -v pacman  >/dev/null; then pacman -Sy --noconfirm git
-          elif command -v zypper  >/dev/null; then zypper --non-interactive refresh && zypper --non-interactive install bash git tar gzip
+          elif command -v zypper  >/dev/null; then
+            out="$( { zypper --non-interactive refresh && zypper --non-interactive install bash git tar gzip; } 2>&1 )" \
+              || { echo "::error title=zypper::$(printf '%s' "$out" | tail -25 | tr '\n' '|')"; exit 1; }
           elif command -v apk     >/dev/null; then apk add git bash
           fi
       - uses: actions/checkout@v5
