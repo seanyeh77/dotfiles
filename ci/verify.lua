@@ -21,6 +21,15 @@ for _, m in ipairs(vim.split(vim.fn.execute("messages"), "\n")) do
 end
 check("startup: no errors", #errs == 0, table.concat(errs, " | "))
 check("LazyVim loaded", _G.LazyVim ~= nil)
+-- Per-user tools: on glibc Linux, nvim and tree-sitter come from this user's ~/.local
+-- (macOS and Alpine use the package manager instead)
+local home = vim.env.HOME
+if vim.uv.os_uname().sysname == "Linux" and vim.fn.filereadable("/etc/alpine-release") == 0 then
+  local nvim_path = vim.uv.fs_realpath(vim.v.progpath) or vim.v.progpath
+  check("nvim from ~/.local", vim.startswith(nvim_path, home .. "/"), nvim_path)
+  local ts = vim.fn.exepath("tree-sitter")
+  check("tree-sitter from ~/.local", vim.startswith(ts, home .. "/"), ts)
+end
 check("colorscheme catppuccin", (vim.g.colors_name or ""):find("catppuccin") ~= nil, tostring(vim.g.colors_name))
 
 -- 2. Mason packages and treesitter parsers (lists come from LazyVim's config)

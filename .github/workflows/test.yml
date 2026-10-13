@@ -22,6 +22,9 @@ jobs:
           - { name: macos arm64,        os: macos-latest }
     steps:
       - uses: actions/checkout@v5
+      - name: put ~/.local/bin on PATH (steps do not read ~/.bashrc)
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        shell: bash
       - name: install.sh
         timeout-minutes: 25
         run: bash install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
@@ -90,6 +93,9 @@ jobs:
           elif command -v apk     >/dev/null; then apk add git bash
           fi
       - uses: actions/checkout@v5
+      - name: put ~/.local/bin on PATH (steps do not read ~/.bashrc)
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        shell: bash
       - name: install.sh
         timeout-minutes: 25
         run: bash install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
@@ -107,7 +113,7 @@ jobs:
         run: |
           M="$HOME/.local/share/nvim/mason"
           mkdir -p "$M/bin" "$M/packages/tree-sitter-cli"
-          cp /opt/node/lib/node_modules/tree-sitter-cli/tree-sitter "$M/packages/tree-sitter-cli/tree-sitter"
+          cp "$HOME/.local/opt/tree-sitter-cli/node_modules/tree-sitter-cli/tree-sitter" "$M/packages/tree-sitter-cli/tree-sitter"
           ln -sf "$M/packages/tree-sitter-cli/tree-sitter" "$M/bin/tree-sitter"
           if "$M/bin/tree-sitter" --version >/dev/null 2>&1; then echo "::warning::planted binary runs here, test is weaker"; fi
           export PATH="$M/bin:$PATH"
@@ -125,12 +131,61 @@ jobs:
         run: bash ci/annotate.sh "$RUNNER_TEMP"
         shell: bash
 
+  # A regular user with no sudo: OS packages come from an admin, everything else must land in
+  # the user's home. Also checks a second user gets their own, separate tools.
+  no-sudo:
+    runs-on: ubuntu-24.04
+    container: debian:13
+    timeout-minutes: 45
+    steps:
+      - name: admin installs shared OS packages (no sudo in the image)
+        run: |
+          apt-get update
+          apt-get install -y git curl ca-certificates tar gzip xz-utils unzip tmux ripgrep build-essential \
+            python3 python3-venv perl clangd procps
+          ! command -v sudo
+          useradd -m -s /bin/bash alice
+          useradd -m -s /bin/bash bob
+      - uses: actions/checkout@v5
+      - name: install as alice and bob
+        timeout-minutes: 40
+        shell: bash -o pipefail {0}
+        run: |
+          for u in alice bob; do
+            cp -r "$GITHUB_WORKSPACE" "/home/$u/dotfiles" && chown -R "$u:$u" "/home/$u/dotfiles"
+            su - "$u" -c "DOTFILES_DIR=/home/$u/dotfiles bash /home/$u/dotfiles/install.sh" 2>&1 | tee -a "$RUNNER_TEMP/install.log"
+          done
+      - name: verify as alice
+        shell: bash -o pipefail {0}
+        run: su - alice -c 'bash -lc "nvim --headless -c \"luafile ~/dotfiles/ci/verify.lua\""' 2>&1 | tee "$RUNNER_TEMP/verify.log"
+      - name: verify tmux as alice
+        shell: bash -o pipefail {0}
+        run: su - alice -c 'bash ~/dotfiles/ci/verify-tmux.sh' 2>&1 | tee "$RUNNER_TEMP/verify-tmux.log"
+      - name: each user has their own tools
+        shell: bash
+        run: |
+          for u in alice bob; do
+            for c in nvim node tree-sitter; do
+              p="$(su - "$u" -c "bash -lc 'readlink -f \$(command -v $c)'")"
+              echo "$u $c -> $p"
+              case "$p" in "/home/$u/"*) ;; *) echo "::error::$u's $c is not in /home/$u: $p"; exit 1 ;; esac
+            done
+          done
+          ! ls /usr/local/bin/nvim /usr/local/bin/tree-sitter 2>/dev/null
+      - name: report failure
+        if: failure() || cancelled()
+        run: bash ci/annotate.sh "$RUNNER_TEMP"
+        shell: bash
+
   # Test the exact command users run (main only, since the short URL serves main)
   one-liner:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      - name: put ~/.local/bin on PATH (steps do not read ~/.bashrc)
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        shell: bash
       - name: curl | bash
         timeout-minutes: 25
         run: curl -fsSL ${{ github.repository_owner }}.github.io/dotfiles | bash 2>&1 | tee "$RUNNER_TEMP/install.log"

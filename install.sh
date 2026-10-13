@@ -20,8 +20,14 @@ warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 has()  { command -v "$1" >/dev/null 2>&1; }
 
-# Running as root (e.g. in a container) may not have sudo
-if [ "$(id -u)" -eq 0 ]; then sudo() { "$@"; }; fi
+# Each user gets their own Neovim, Node.js and tree-sitter in ~/.local, so users on the same
+# machine never share or overwrite each other's tools. Only shared OS packages (tmux, git,
+# compilers, ripgrep) need sudo, and that step is skipped when sudo is not available.
+LOCAL_BIN="$HOME/.local/bin"
+LOCAL_OPT="$HOME/.local/opt"
+mkdir -p "$LOCAL_BIN" "$LOCAL_OPT"
+case ":$PATH:" in *":$LOCAL_BIN:"*) ;; *) PATH="$LOCAL_BIN:$PATH" ;; esac
+export PATH
 
 # Download with curl, falling back to wget; retry a few times so a network blip does not
 # abort the whole install
@@ -168,6 +174,21 @@ pm_install() { # pm_install REQUIRED... -- OPTIONAL...
   done
 }
 
+# Shared OS packages need root. Use sudo when this user has it (NO_SUDO=1 skips it); otherwise
+# carry on with whatever is already installed and say what is missing.
+SUDO_OK=0
+if [ "$(id -u)" -eq 0 ]; then
+  sudo() { "$@"; }; SUDO_OK=1
+elif [ "$PM" = brew ]; then
+  SUDO_OK=1 # Homebrew does not use sudo
+elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
+  log "sudo is used only for shared OS packages (tmux, git, compilers, ripgrep)"
+  sudo -v && SUDO_OK=1 || warn "no sudo: skipping OS packages, using what is already installed"
+else
+  warn "no sudo: skipping OS packages, using what is already installed"
+fi
+
+if [ "$SUDO_OK" = 1 ]; then
 log "Installing system packages"
 # Skip curl when present: on RHEL, curl-minimal conflicts with the curl package
 CURL_PKG=curl; has curl && CURL_PKG=""
@@ -202,22 +223,30 @@ case "$PM" in
     pm_install bash git curl wget unzip tar gzip xz tmux perl ripgrep build-base python3 py3-pip neovim nodejs npm \
       -- fd clang-extra-tools lua-language-server tree-sitter-cli xclip ;;
 esac
+else
+  missing=""
+  for c in git tar gzip unzip tmux make perl rg python3; do has "$c" || missing="$missing $c"; done
+  has cc || has gcc || has clang || missing="$missing cc"
+  has curl || has wget || missing="$missing curl"
+  case " $missing " in *" git "*|*" tar "*|*" curl "*) die "missing required tools:$missing (ask an admin to install them)" ;; esac
+  [ -z "$missing" ] || warn "missing tools:$missing (ask an admin to install them; related features will not work)"
+fi
 
 # Debian/Ubuntu ship fd as fdfind
-if ! has fd && has fdfind; then sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd; fi
+if ! has fd && has fdfind; then ln -sf "$(command -v fdfind)" "$LOCAL_BIN/fd"; fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-sudo mkdir -p /usr/local/bin
 
 # ---------- Neovim ----------
-# glibc Linux: official release (distro versions are often too old; the config needs >= 0.11)
+# glibc Linux: official release in ~/.local/opt/nvim (distro versions are often too old; the
+# config needs >= 0.11). macOS and Alpine use the package manager's Neovim.
 if [ "$USE_PM_NVIM" = 0 ]; then
-  log "Installing Neovim (official release, $NVIM_ARCH)"
+  log "Installing Neovim (official release, $NVIM_ARCH) in ~/.local/opt/nvim"
   fetch "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
-  sudo rm -rf "/opt/nvim-linux-${NVIM_ARCH}"
-  sudo tar -C /opt -xzf "$TMP/nvim.tar.gz"
-  sudo ln -sf "/opt/nvim-linux-${NVIM_ARCH}/bin/nvim" /usr/local/bin/nvim
+  rm -rf "$LOCAL_OPT/nvim" && mkdir -p "$LOCAL_OPT/nvim"
+  tar -C "$LOCAL_OPT/nvim" --strip-components=1 -xzf "$TMP/nvim.tar.gz"
+  ln -sf "$LOCAL_OPT/nvim/bin/nvim" "$LOCAL_BIN/nvim"
 fi
 hash -r
 # Capture first, then trim: `nvim --version | head -1` can die of SIGPIPE (exit 141) under pipefail
@@ -229,40 +258,50 @@ NVIM_MINOR="$(printf '%s' "$NVIM_VER" | sed -E 's/.*v0\.([0-9]+).*/\1/')"
 # ---------- Node.js (needed by pyright, ts_ls, bashls, prettier, ...) ----------
 node_ok() { has node && [ "$(node -v | cut -d. -f1 | tr -d v)" -ge 18 ]; }
 if ! node_ok && [ "$USE_PM_NODE" = 0 ]; then
-  log "Installing Node.js $NODE_MAJOR ($NODE_ARCH)"
+  log "Installing Node.js $NODE_MAJOR ($NODE_ARCH) in ~/.local/opt/node"
   BASE="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x"
   SUMS="$(fetch "$BASE/SHASUMS256.txt")"
   NODE_TAR="$(printf '%s\n' "$SUMS" | awk -v a="linux-${NODE_ARCH}.tar.xz" '$2 ~ a"$" {print $2; exit}')"
   [ -n "$NODE_TAR" ] || die "Cannot find Node.js tarball for linux-${NODE_ARCH}"
   fetch "$BASE/$NODE_TAR" "$TMP/$NODE_TAR"
-  sudo rm -rf /opt/node && sudo mkdir -p /opt/node
-  sudo tar -C /opt/node --strip-components=1 -xJf "$TMP/$NODE_TAR"
-  for b in node npm npx; do sudo ln -sf "/opt/node/bin/$b" "/usr/local/bin/$b"; done
+  rm -rf "$LOCAL_OPT/node" && mkdir -p "$LOCAL_OPT/node"
+  tar -C "$LOCAL_OPT/node" --strip-components=1 -xJf "$TMP/$NODE_TAR"
+  for b in node npm npx; do ln -sf "$LOCAL_OPT/node/bin/$b" "$LOCAL_BIN/$b"; done
   hash -r
 fi
 node_ok || warn "Node.js >= 18 not found, JS-based LSPs (pyright, ts_ls...) will fail"
 
 # ---------- tree-sitter CLI (nvim-treesitter uses it to compile parsers) ----------
-if ! has tree-sitter && has npm; then
-  log "Installing tree-sitter CLI"
-  if [ "$PM" = brew ]; then npm install -g tree-sitter-cli >/dev/null
-  else sudo npm install -g tree-sitter-cli >/dev/null; fi
-  [ -x /opt/node/bin/tree-sitter ] && sudo ln -sf /opt/node/bin/tree-sitter /usr/local/bin/tree-sitter
+ts_works() { local v; v="$("$1" --version 2>&1)" || return 1; case "$v" in *GLIBC*) return 1 ;; esac; return 0; }
+ts_broken() { ! has tree-sitter || ! ts_works tree-sitter; }
+if [ "$PM" = brew ] || [ "$PM" = apk ]; then
+  : # installed with the package manager above
+elif ! ts_works "$LOCAL_BIN/tree-sitter" && has npm; then
+  # npm package in ~/.local/opt/tree-sitter-cli; works with any Node.js, no global install
+  log "Installing tree-sitter CLI in ~/.local/opt/tree-sitter-cli"
+  npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" tree-sitter-cli >/dev/null
+  ln -sf "$LOCAL_OPT/tree-sitter-cli/node_modules/.bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
   hash -r
-fi
-# The prebuilt tree-sitter binary (npm / GitHub release) needs glibc 2.39. On older systems
-# (Debian 12, RHEL 9) it fails with "GLIBC_2.39 not found", so build it from source with cargo.
-ts_broken() { local v; v="$(tree-sitter --version 2>&1)" || return 0; case "$v" in *GLIBC*) return 0 ;; esac; return 1; }
-if has tree-sitter && ts_broken; then
-  log "tree-sitter binary needs newer glibc, building from source with cargo (takes a few minutes)"
-  if ! has cargo && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
-    fetch https://sh.rustup.rs "$TMP/rustup.sh"
-    sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null
+  # The prebuilt binary needs glibc 2.39. On older systems (Debian 12, RHEL 9, Ubuntu 22.04)
+  # it fails with "GLIBC_2.39 not found", so build it from source with cargo instead.
+  if ! ts_works "$LOCAL_BIN/tree-sitter"; then
+    log "tree-sitter binary needs newer glibc, building from source with cargo (takes a few minutes)"
+    if ! has cargo && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+      fetch https://sh.rustup.rs "$TMP/rustup.sh"
+      sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null
+    fi
+    CARGO="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
+    "$CARGO" install --locked tree-sitter-cli
+    ln -sf "$HOME/.cargo/bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
+    hash -r
   fi
-  CARGO="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
-  "$CARGO" install --locked tree-sitter-cli
-  sudo ln -sf "$HOME/.cargo/bin/tree-sitter" /usr/local/bin/tree-sitter
-  hash -r
+fi
+# Older versions of this installer linked /usr/local/bin/tree-sitter to one user's ~/.cargo,
+# which other users cannot run. Remove that link when we can.
+if [ "$SUDO_OK" = 1 ] && [ -L /usr/local/bin/tree-sitter ]; then
+  case "$(readlink /usr/local/bin/tree-sitter)" in
+    */.cargo/bin/tree-sitter) sudo rm -f /usr/local/bin/tree-sitter ;;
+  esac
 fi
 if ! has tree-sitter || ts_broken; then
   warn "tree-sitter CLI missing or broken, syntax highlighting parsers will not compile"
@@ -335,7 +374,7 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
   log "Installing Claude Code"
   if [ "$PM" = apk ]; then
     # musl: the native binary needs libgcc / libstdc++ and uses the system ripgrep
-    sudo apk add libgcc libstdc++ ripgrep >/dev/null
+    if [ "$SUDO_OK" = 1 ]; then sudo apk add libgcc libstdc++ ripgrep >/dev/null; fi
     mkdir -p "$HOME/.claude"
     if [ ! -f "$HOME/.claude/settings.json" ]; then
       printf '{\n  "env": { "USE_BUILTIN_RIPGREP": "0" }\n}\n' > "$HOME/.claude/settings.json"
