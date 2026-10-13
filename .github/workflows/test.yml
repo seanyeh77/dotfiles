@@ -29,7 +29,7 @@ jobs:
         env:
           DOTFILES_DIR: ${{ github.workspace }}
           INSTALL_CLAUDE: ${{ matrix.claude && '1' || '0' }}
-          CLAUDE_PLUGINS: commit-commands
+          CLAUDE_PLUGINS: commit-commands frontend-design
       - name: verify
         run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
         shell: bash -o pipefail {0}
@@ -38,7 +38,7 @@ jobs:
         shell: bash -o pipefail {0}
       - name: verify claude
         if: matrix.claude
-        run: bash ci/verify-claude.sh commit-commands 2>&1 | tee "$RUNNER_TEMP/verify-claude.log"
+        run: bash ci/verify-claude.sh commit-commands frontend-design 2>&1 | tee "$RUNNER_TEMP/verify-claude.log"
         shell: bash -o pipefail {0}
       - name: report failure
         if: failure() || cancelled()

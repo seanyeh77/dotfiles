@@ -80,6 +80,7 @@ CLAUDE_WORKFLOW_PLUGINS=(
   "code-review|review your changes before committing"
   "feature-dev|guided feature development workflow"
   "security-guidance|warn about security issues while Claude edits"
+  "frontend-design|distinctive, production-grade web UI design"
 )
 HAS_TTY=0; ( exec </dev/tty ) 2>/dev/null && HAS_TTY=1
 ask() { # ask PROMPT DEFAULT -> REPLY
