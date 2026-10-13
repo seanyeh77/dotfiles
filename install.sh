@@ -6,6 +6,26 @@
 #   no curl:  wget -qO- seanyeh77.github.io/dotfiles | bash
 # Safe to re-run: it updates the repo and syncs plugins / LSP servers.
 
+# This is a bash script. When started by another shell (`curl ... | zsh`, `| sh`), hand over
+# to bash: from a file run it again with bash, from a pipe download it again into bash.
+# Written in plain POSIX sh so zsh and dash can run these lines before handing over.
+if [ -z "${BASH_VERSION:-}" ]; then
+  DOTFILES_URL="${DOTFILES_URL:-https://seanyeh77.github.io/dotfiles}"
+  if ! command -v bash >/dev/null 2>&1; then
+    echo "xx this installer needs bash; install bash and run it again" >&2; exit 1
+  fi
+  case "${0:-}" in
+    *install.sh) [ -f "$0" ] && exec bash "$0" "$@" ;;
+  esac
+  echo "==> re-running with bash" >&2
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$DOTFILES_URL" | bash -s -- "$@"
+  else
+    wget -qO- "$DOTFILES_URL" | bash -s -- "$@"
+  fi
+  exit $?
+fi
+
 # Everything is wrapped in { ... } so bash reads the whole script before running any of it.
 # With `curl ... | bash`, commands that read stdin would otherwise eat the rest of the script.
 {
