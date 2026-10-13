@@ -2,9 +2,13 @@
 # One-command installer for a Neovim + tmux development environment.
 #   OS:   macOS, Debian/Ubuntu, Fedora/RHEL/Rocky, Arch, openSUSE, Alpine, WSL
 #   Arch: amd64 / arm64
-# Usage:      bash <(curl -fsSL https://raw.githubusercontent.com/seanyeh77/dotfiles/main/install.sh)
-#   no curl:  bash <(wget -qO- https://raw.githubusercontent.com/seanyeh77/dotfiles/main/install.sh)
+# Usage:      curl -fsSL seanyeh77.github.io/dotfiles | bash
+#   no curl:  wget -qO- seanyeh77.github.io/dotfiles | bash
 # Safe to re-run: it updates the repo and syncs plugins / LSP servers.
+
+# Everything is wrapped in { ... } so bash reads the whole script before running any of it.
+# With `curl ... | bash`, commands that read stdin would otherwise eat the rest of the script.
+{
 set -euo pipefail
 
 DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/seanyeh77/dotfiles}"
@@ -359,3 +363,5 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
 fi
 
 log "Done. Open a new shell, then run nvim (and tmux). :checkhealth and :Mason show the details"
+exit 0
+}

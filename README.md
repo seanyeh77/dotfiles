@@ -7,7 +7,7 @@ Neovim ([LazyVim](https://www.lazyvim.org)) and tmux ([Oh my tmux!](https://gith
 ## Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/seanyeh77/dotfiles/main/install.sh)
+curl -fsSL seanyeh77.github.io/dotfiles | bash
 ```
 
 Run the same command again to update.
