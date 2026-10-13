@@ -114,7 +114,7 @@ jobs:
         run: bash ci/annotate.sh "$RUNNER_TEMP"
         shell: bash
 
-  # Test the exact command users run (main only, since the raw URL serves main)
+  # Test the exact command users run (main only, since the short URL serves main)
   one-liner:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
@@ -122,7 +122,7 @@ jobs:
     steps:
       - name: curl | bash
         timeout-minutes: 25
-        run: bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh) 2>&1 | tee "$RUNNER_TEMP/install.log"
+        run: curl -fsSL ${{ github.repository_owner }}.github.io/dotfiles | bash 2>&1 | tee "$RUNNER_TEMP/install.log"
         shell: bash -o pipefail {0}
         env:
           DOTFILES_REPO: https://github.com/${{ github.repository }}
