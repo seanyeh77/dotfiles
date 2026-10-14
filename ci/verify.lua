@@ -30,6 +30,11 @@ if vim.uv.os_uname().sysname == "Linux" and vim.fn.filereadable("/etc/alpine-rel
   local ts = vim.fn.exepath("tree-sitter")
   check("tree-sitter from ~/.local", vim.startswith(ts, home .. "/"), ts)
 end
+-- Python comes from uv in this user's ~/.local on every OS, with a working venv (Mason needs it)
+local py = vim.uv.fs_realpath(vim.fn.exepath("python3")) or ""
+check("python3 from uv in ~", vim.startswith(py, home .. "/"), py)
+vim.fn.system({ "python3", "-c", "import venv, ensurepip" })
+check("python3 has venv and pip", vim.v.shell_error == 0)
 check("colorscheme catppuccin", (vim.g.colors_name or ""):find("catppuccin") ~= nil, tostring(vim.g.colors_name))
 
 -- 2. Mason packages and treesitter parsers (lists come from LazyVim's config)

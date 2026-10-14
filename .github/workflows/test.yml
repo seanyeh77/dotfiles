@@ -136,6 +136,8 @@ jobs:
           rm -f "$HOME/.local/share/nvim/site/parser/c.so"   # force a parser to compile again
           bash install.sh 2>&1 | tee "$RUNNER_TEMP/install-rerun.log"
           ! grep -q "GLIBC_2.39" "$RUNNER_TEMP/install-rerun.log"
+          # A re-run must not install or upgrade anything that is already there
+          grep -q "Everything is already installed" "$RUNNER_TEMP/install-rerun.log"
       - name: verify
         run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
         shell: bash -o pipefail {0}
@@ -158,7 +160,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y git curl ca-certificates tar gzip xz-utils unzip tmux ripgrep build-essential \
-            python3 python3-venv perl clangd procps
+            perl clangd procps
           ! command -v sudo
           useradd -m -s /bin/bash alice
           useradd -m -s /bin/bash bob
@@ -181,7 +183,7 @@ jobs:
         shell: bash
         run: |
           for u in alice bob; do
-            for c in nvim node tree-sitter; do
+            for c in nvim node tree-sitter uv python3; do
               p="$(su - "$u" -c "bash -lc 'readlink -f \$(command -v $c)'")"
               echo "$u $c -> $p"
               case "$p" in "/home/$u/"*) ;; *) echo "::error::$u's $c is not in /home/$u: $p"; exit 1 ;; esac

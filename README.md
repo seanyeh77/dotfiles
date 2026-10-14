@@ -10,9 +10,10 @@ Neovim ([LazyVim](https://www.lazyvim.org)) and tmux ([Oh my tmux!](https://gith
 curl -fsSL seanyeh77.github.io/dotfiles | bash
 ```
 
-Run the same command again to update.
+It lists what is not installed yet and asks once before installing it; anything already installed is left as it is. Run it again to update this config and add anything missing.
 
 - **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine and WSL, on amd64 or arm64
+- **Per user**: Neovim, Node.js, tree-sitter, [uv](https://docs.astral.sh/uv/) and Python go in `~/.local`; sudo is only asked for missing OS packages (git, tmux, compilers, ripgrep)
 - **Font**: use a [Nerd Font](https://www.nerdfonts.com) in your local terminal, or icons show as boxes
 - **Claude Code**: the installer asks whether to install it and which plugins to add (press Enter for all):
   - Workflow: commit-commands, code-review, feature-dev, security-guidance, code-simplifier, claude-md-management, superpowers, context7
