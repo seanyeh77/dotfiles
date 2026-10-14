@@ -132,9 +132,18 @@ ask() { # ask PROMPT DEFAULT -> REPLY
   [ -n "$REPLY" ] || REPLY="$2"
 }
 
+# Answers are saved, so later runs do not ask again (DOTFILES_ASK=1 asks again)
+ANSWERS="${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles/answers"
+SAVED_ANSWERS=0; ASKED=0
+if [ -z "${INSTALL_CLAUDE:-}" ] && [ -z "${CLAUDE_PLUGINS+set}" ] && [ "${DOTFILES_ASK:-0}" != 1 ] && [ -f "$ANSWERS" ]; then
+  # shellcheck source=/dev/null
+  . "$ANSWERS" # INSTALL_CLAUDE=0|1 and CLAUDE_PLUGINS="names"
+  SAVED_ANSWERS=1
+fi
 if [ -z "${INSTALL_CLAUDE:-}" ]; then
   INSTALL_CLAUDE=0
   if [ "$HAS_TTY" = 1 ]; then
+    ASKED=1
     ask "Install Claude Code? [Y/n]" y
     case "$REPLY" in [Nn]*) INSTALL_CLAUDE=0 ;; *) INSTALL_CLAUDE=1 ;; esac
   fi
@@ -143,6 +152,7 @@ if [ "$INSTALL_CLAUDE" = 1 ] && [ -z "${CLAUDE_PLUGINS+set}" ]; then
   CLAUDE_PLUGINS=""
   for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do CLAUDE_PLUGINS="$CLAUDE_PLUGINS ${e%%|*}"; done
   if [ "$HAS_TTY" = 1 ]; then
+    ASKED=1
     {
       echo "   Claude Code plugins and skills:"
       i=1; for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do
@@ -168,7 +178,17 @@ if [ "$INSTALL_CLAUDE" = 1 ] && [ -z "${CLAUDE_PLUGINS+set}" ]; then
 fi
 CLAUDE_PLUGINS="$(echo ${CLAUDE_PLUGINS:-})" # normalize spaces
 case "$CLAUDE_PLUGINS" in none|NONE) CLAUDE_PLUGINS="" ;; esac
-[ "$INSTALL_CLAUDE" = 1 ] && log "Claude Code: yes, plugins: ${CLAUDE_PLUGINS:-none}" || log "Claude Code: skipped"
+if [ "$ASKED" = 1 ]; then
+  mkdir -p "$(dirname "$ANSWERS")"
+  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\n' "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" > "$ANSWERS"
+fi
+SAVED_NOTE=""; [ "$SAVED_ANSWERS" = 1 ] && SAVED_NOTE=" (saved answer; DOTFILES_ASK=1 asks again)"
+if [ "$INSTALL_CLAUDE" = 1 ]; then
+  n=0; for p in $CLAUDE_PLUGINS; do n=$((n + 1)); done
+  log "Claude Code: yes, $n plugins and skills$SAVED_NOTE"
+else
+  log "Claude Code: no$SAVED_NOTE"
+fi
 
 
 # ---------- What to install or update ----------
@@ -367,20 +387,23 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
 fi
 # Wait for all of them, printing each one as it finishes (at most ~2 minutes: every lookup is bounded)
 lookup_wait() {
-  local i n=${#L_PIDS[@]} left start=$SECONDS shown=""
+  local i n=${#L_PIDS[@]} start=$SECONDS shown="" pending
   [ "$n" -gt 0 ] || return 0
-  echo "   looking up: ${L_LABELS[*]}"
+  [ -t 1 ] || echo "   looking up: ${L_LABELS[*]}"
   while :; do
-    left=0
+    pending=""
     for i in "${!L_PIDS[@]}"; do
       case " $shown " in *" $i "*) continue ;; esac
-      if kill -0 "${L_PIDS[$i]}" 2>/dev/null; then left=$((left + 1)); continue; fi
+      if kill -0 "${L_PIDS[$i]}" 2>/dev/null; then pending="$pending, ${L_LABELS[$i]}"; continue; fi
       shown="$shown $i"
-      printf '   %-20s done (%ss)\n' "${L_LABELS[$i]}" "$((SECONDS - start))"
+      [ -t 1 ] || printf '   %-20s done (%ss)\n' "${L_LABELS[$i]}" "$((SECONDS - start))"
     done
-    [ "$left" -eq 0 ] && break
+    # On a terminal: one line that updates in place
+    [ -z "$pending" ] && break
+    [ -t 1 ] && printf '\r\033[K   %ss  waiting for: %s' "$((SECONDS - start))" "${pending#, }"
     sleep 1
   done
+  [ -t 1 ] && printf '\r\033[K   checked %d items in %ss\n' "$n" "$((SECONDS - start))"
   wait 2>/dev/null || true
 }
 lookup_wait
@@ -732,6 +755,13 @@ if [ "$NEED_PY" = 1 ] && has uv; then
   fi
 fi
 
+# Plugin commits before this run, to list what changed at the end. The lockfile used to live in
+# the repo (nvim/lazy-lock.json), so read that one if there is no per-user lockfile yet.
+LAZY_LOCK="$DATA_HOME/nvim/lazy-lock.json"
+lock_commits() { [ -f "$1" ] && sed -n 's/^ *"\([^"]*\)": *{.*"commit": *"\([0-9a-f]\{7\}\).*/\1 \2/p' "$1" | LC_ALL=C sort; }
+if [ -f "$LAZY_LOCK" ]; then lock_commits "$LAZY_LOCK" > "$TMP/lock.before" || true
+else lock_commits "$DOTFILES_DIR/nvim/lazy-lock.json" > "$TMP/lock.before" 2>/dev/null || true; fi
+
 # ---------- dotfiles ----------
 log "Linking dotfiles"
 if [ "$NEED_DOTFILES" = 0 ]; then
@@ -794,19 +824,21 @@ done
 # and Mason / treesitter skip what is already there.
 # Bound every step so a network problem cannot hang forever (macOS has no timeout: run as is)
 # Lazy sync: install missing plugins and update all of them to the latest commit
-log "Installing and updating nvim plugins (LazyVim)"
-# Which plugin commits changed: compare the lockfile before and after the sync
-LAZY_LOCK="$DATA_HOME/nvim/lazy-lock.json"
-lock_commits() { [ -f "$1" ] && sed -n 's/^ *"\([^"]*\)": *{.*"commit": *"\([0-9a-f]\{7\}\).*/\1 \2/p' "$1" | LC_ALL=C sort; }
-lock_commits "$LAZY_LOCK" > "$TMP/lock.before" || true
-if with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! sync" +qa </dev/null; then
+log "Installing and updating nvim plugins (LazyVim, up to a minute)"
+# Lazy's per-plugin progress goes to a log (shown only on failure); the summary lists the
+# plugins whose commit changed (lockfile before vs after)
+if with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! sync" +qa </dev/null > "$TMP/lazy.log" 2>&1; then
   lock_commits "$LAZY_LOCK" > "$TMP/lock.after" || true
+  n="$(wc -l < "$TMP/lock.after" | tr -d ' ')"
+  m=0; [ -s "$TMP/lock.before" ] && m="$(LC_ALL=C join "$TMP/lock.before" "$TMP/lock.after" | awk '$2 != $3' | wc -l | tr -d ' ')"
+  echo "   $n plugins, $m updated"
   if [ -s "$TMP/lock.before" ]; then
     LC_ALL=C join "$TMP/lock.before" "$TMP/lock.after" | awk '$2 != $3 {print "nvim plugin " $1 " " $2 " -> " $3}' > "$TMP/plugins.done"
     LC_ALL=C join -v 2 "$TMP/lock.before" "$TMP/lock.after" | awk '{print "nvim plugin " $1 " new " $2}' >> "$TMP/plugins.done"
     while IFS= read -r l; do did "$l"; done < "$TMP/plugins.done"
   fi
 else
+  tail -n 20 "$TMP/lazy.log" | tr -d '\r' >&2
   failed "nvim plugins (Lazy sync failed or timed out, run :Lazy sync)"
 fi
 
@@ -817,8 +849,10 @@ export CFLAGS="${CFLAGS:--O2}"
 # DOTFILES_HEADLESS_INSTALL stops LazyVim's background parser builds; headless.lua builds them
 # itself and waits for every Mason package and parser to finish (see nvim/lua/dotfiles/headless.lua)
 # `cquit 1` runs only if install() itself failed to quit (e.g. a Lua error), so nvim never hangs
+# Shows only what changes (Mason installs / updates, parser builds, errors); full log in a file
 if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install()" \
-     -c "cquit 1" </dev/null | tee "$TMP/headless.log"; then
+     -c "cquit 1" </dev/null 2>&1 | tee "$TMP/headless.log" \
+     | { grep --line-buffered -E 'mason: |treesitter round|^!!' || true; }; then
   [ "$NEED_LAZY" = 1 ] && did "nvim plugins, LSP servers, formatters and parsers (latest)"
   # "  mason: updating NAME A -> B" / "  mason: installing NAME V" lines from headless.lua
   sed -n 's/^ *mason: updating \(.*\)/Mason \1/p; s/^ *mason: installing \(.*\)/Mason \1 (new)/p' "$TMP/headless.log" \
