@@ -10,7 +10,7 @@ Neovim ([LazyVim](https://www.lazyvim.org)) and tmux ([Oh my tmux!](https://gith
 curl -fsSL seanyeh77.github.io/dotfiles | bash
 ```
 
-Before changing anything it shows a plan with versions and asks once: system changes (OS packages, needs sudo, affects every user) are only made for missing packages, while your own tools in `~` (Neovim, Node.js LTS, tree-sitter, uv, Python, nvim plugins, LSP servers, Claude Code) are installed or updated to the latest release. Run it again to update.
+Before changing anything it shows a plan with versions and asks once: system changes (OS packages, needs sudo, affects every user) are only made for missing packages, while your own tools in `~` (Neovim, Node.js LTS, tree-sitter, uv, Python, nvim plugins, LSP servers, Claude Code) are installed or updated to the latest release. Claude Code is set not to add itself as a co-author of commits and PRs. Run it again to update.
 
 - **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine and WSL, on amd64 or arm64
 - **Per user**: Neovim, Node.js, tree-sitter, [uv](https://docs.astral.sh/uv/) and Python go in `~/.local`; sudo is only asked for missing OS packages (git, tmux, compilers, ripgrep)

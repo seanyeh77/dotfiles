@@ -60,6 +60,8 @@ fetch_once() { # fetch_once URL [OUTFILE]
     if [ $# -ge 2 ]; then wget -qO "$2" "$1"; else wget -qO- "$1"; fi
   else die "Need curl or wget"; fi
 }
+# For version lookups: never fails, prints nothing when there is no curl / wget yet
+fetch_quiet() { { has curl || has wget; } || return 0; fetch_once "$@" 2>/dev/null || true; }
 fetch() { # fetch URL [OUTFILE]
   local i
   for i in 1 2 3 4; do
@@ -162,6 +164,7 @@ if [ "$INSTALL_CLAUDE" = 1 ] && [ -z "${CLAUDE_PLUGINS+set}" ]; then
   fi
 fi
 CLAUDE_PLUGINS="$(echo ${CLAUDE_PLUGINS:-})" # normalize spaces
+case "$CLAUDE_PLUGINS" in none|NONE) CLAUDE_PLUGINS="" ;; esac
 [ "$INSTALL_CLAUDE" = 1 ] && log "Claude Code: yes, plugins: ${CLAUDE_PLUGINS:-none}" || log "Claude Code: skipped"
 
 
@@ -310,7 +313,7 @@ NODE_CUR=""; NODE_LATEST=""; NEED_NODE=0
 if [ "$USE_PM_NODE" = 0 ]; then
   NODE_CUR="$("$LOCAL_OPT/node/bin/node" -v 2>/dev/null || true)"
   # Latest LTS: first row of index.tab whose lts column is set (capture first: awk exits early)
-  v="$(fetch_once https://nodejs.org/dist/index.tab 2>/dev/null || true)"
+  v="$(fetch_quiet https://nodejs.org/dist/index.tab)"
   NODE_LATEST="$(printf '%s\n' "$v" | awk -F'\t' 'NR > 1 && $10 != "-" && $10 != "" && !x {x = $1} END {print x}')"
   outdated "$NODE_CUR" "$NODE_LATEST" && NEED_NODE=1
 fi
@@ -371,7 +374,7 @@ NEED_CLAUDE=0; CLAUDE_CUR=""; CLAUDE_LATEST=""; MISS_PLUGINS=""
 INSTALLED_PLUGINS=""
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   # Same version numbers as the native build
-  v="$(fetch_once https://registry.npmjs.org/@anthropic-ai/claude-code/latest 2>/dev/null || true)"
+  v="$(fetch_quiet https://registry.npmjs.org/@anthropic-ai/claude-code/latest)"
   CLAUDE_LATEST="$(printf '%s' "$v" | grep -o '"version":"[^"]*"' | sed -n '1s/.*:"\(.*\)"/\1/p' || true)"
   if has claude; then
     INSTALLED_PLUGINS="$(claude plugin list 2>/dev/null || true)"
@@ -457,6 +460,13 @@ for p in $MISS_PLUGINS; do
   if [ "$(plugin_source "$p")" = skill ]; then user_plan "Claude skill $p" "new, latest"
   else user_plan "Claude plugin $p" "new, latest"; fi
 done
+# Claude Code settings this installer manages in ~/.claude/settings.json (only keys that are unset)
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+NEED_CLAUDE_ATTR=0
+if [ "$INSTALL_CLAUDE" = 1 ] && ! grep -qs '"attribution"' "$CLAUDE_SETTINGS"; then
+  NEED_CLAUDE_ATTR=1
+  user_plan "Claude settings" "no Co-Authored-By trailer in commits, no attribution line in PRs"
+fi
 
 if [ ${#SYS_PLAN[@]} -eq 0 ] && [ ${#USER_PLAN[@]} -eq 0 ]; then
   log "Everything is installed and up to date"
@@ -563,6 +573,11 @@ has nvim || die "Neovim is not installed"
 nvim_ok || warn "$(nvim --version 2>/dev/null | sed -n 1p) < 0.11, the config needs 0.11+"
 
 # ---------- Node.js (needed by pyright, ts_ls, bashls, prettier, ...) ----------
+# curl / wget may have been installed just now: look the version up again if needed
+if [ "$NEED_NODE" = 1 ] && [ -z "$NODE_LATEST" ]; then
+  v="$(fetch_quiet https://nodejs.org/dist/index.tab)"
+  NODE_LATEST="$(printf '%s\n' "$v" | awk -F'\t' 'NR > 1 && $10 != "-" && $10 != "" && !x {x = $1} END {print x}')"
+fi
 if [ "$NEED_NODE" = 1 ] && [ -z "$NODE_LATEST" ]; then
   failed "Node.js (could not look up the latest LTS on nodejs.org)"
 elif [ "$NEED_NODE" = 1 ]; then
@@ -732,13 +747,22 @@ fi
 
 # ---------- Claude Code (optional, see the questions at the top) ----------
 if [ "$INSTALL_CLAUDE" = 1 ]; then
-  if [ "$PM" = apk ]; then
-    # musl: libgcc / libstdc++ come with the OS packages above; use the system ripgrep
+  # Settings, merged into ~/.claude/settings.json with Node.js; keys already set are kept:
+  #   attribution: Claude is not added as a co-author of commits and PRs ("" hides the text)
+  #   env.USE_BUILTIN_RIPGREP=0 on musl (Alpine), where the bundled ripgrep cannot run
+  if [ "$NEED_CLAUDE_ATTR" = 1 ] || [ "$PM" = apk ]; then
     mkdir -p "$HOME/.claude"
-    if [ ! -f "$HOME/.claude/settings.json" ]; then
-      printf '{\n  "env": { "USE_BUILTIN_RIPGREP": "0" }\n}\n' > "$HOME/.claude/settings.json"
-    elif ! grep -q USE_BUILTIN_RIPGREP "$HOME/.claude/settings.json"; then
-      warn 'add "env": { "USE_BUILTIN_RIPGREP": "0" } to ~/.claude/settings.json (needed on Alpine)'
+    if CLAUDE_SETTINGS="$CLAUDE_SETTINGS" MUSL="$([ "$PM" = apk ] && echo 1 || echo 0)" node -e '
+      const fs = require("fs"), f = process.env.CLAUDE_SETTINGS;
+      let s = {};
+      if (fs.existsSync(f)) s = JSON.parse(fs.readFileSync(f, "utf8") || "{}");
+      if (s.attribution === undefined) s.attribution = { commit: "", pr: "" };
+      if (process.env.MUSL === "1") { s.env = s.env || {}; if (s.env.USE_BUILTIN_RIPGREP === undefined) s.env.USE_BUILTIN_RIPGREP = "0"; }
+      fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");
+    '; then
+      [ "$NEED_CLAUDE_ATTR" = 1 ] && did "Claude settings: no co-author in commits and PRs"
+    else
+      failed "Claude settings (could not update ~/.claude/settings.json; is it valid JSON?)"
     fi
   fi
   # Native installer: updates itself in the background, so it is only run when claude is missing

@@ -33,6 +33,10 @@ for p in "$@"; do
       check "plugin $p" $r ;;
   esac
 done
+# Claude is not added as a co-author: attribution.commit and attribution.pr are ""
+node -e 'const s = require(process.env.HOME + "/.claude/settings.json");
+  process.exit(s.attribution && s.attribution.commit === "" && s.attribution.pr === "" ? 0 : 1)'
+check "settings: no co-author attribution" $?
 echo "========== claude: $failed failed =========="
 # Summary as an annotation, readable from the run page without downloading logs
 [ -n "${GITHUB_ACTIONS:-}" ] && echo "::notice title=claude plugins::$(claude --version 2>/dev/null) | $(printf '%s\n' "$list" | grep -o '[a-z0-9-]*@[a-z-]*' | sort -u | tr '\n' ' ')"
