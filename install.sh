@@ -188,7 +188,17 @@ elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
   SUDO_OK=2 # ask for the password after the plan, only if there are system changes
 fi
 # Bound slow steps so a network problem cannot hang forever (macOS has no timeout: run as is)
-with_timeout() { local s="$1"; shift; if has timeout; then timeout "$s" "$@"; else "$@"; fi; }
+# macOS has no `timeout`: use gtimeout (coreutils) or perl's alarm, which kills the command when
+# the time is up. The command's stdin is /dev/null, so nothing can wait for input.
+with_timeout() {
+  local s="$1"; shift
+  if has timeout; then timeout "$s" "$@"
+  elif has gtimeout; then gtimeout "$s" "$@"
+  elif has perl; then perl -e 'alarm shift; exec @ARGV or exit 127' "$s" "$@"
+  else "$@"; fi
+}
+# git must never stop to ask for a username or password (it would wait forever, unseen)
+export GIT_TERMINAL_PROMPT=0
 log "Checking what is installed and the latest versions"
 
 # OS packages as package[:command]. A package counts as installed when the package manager has
@@ -317,7 +327,7 @@ git_update() { # git_update DIR: "OLD NEW COUNT" when the upstream is ahead, emp
   printf '%s %s %s' "$(git -c safe.directory="$d" -C "$d" rev-parse --short HEAD)" \
     "$(git -c safe.directory="$d" -C "$d" rev-parse --short '@{u}')" "$n"
 }
-timeout_cmd() { local s="$1"; shift; if has timeout; then timeout "$s" "$@"; else "$@"; fi; }
+timeout_cmd() { with_timeout "$@" </dev/null; }
 
 # The network lookups run in parallel in the background; each writes its answer to a file and
 # is reported as it finishes, so a slow one does not hold up the others.
@@ -341,8 +351,10 @@ lk_python() {
     | sed -n 's/^cpython-\([0-9]*\.[0-9]*\.[0-9]*\)-.*/\1/p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1
 }
 lk_nvim_plan() {
-  timeout_cmd 120 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').plan()" 2>/dev/null \
-    | tr -d '\r' | grep -E '^(plugin|mason)'$'\t'
+  # Output to a file, not a pipe: a git process left behind by a killed nvim cannot hold it open
+  timeout_cmd 120 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').plan()" \
+    > "$LOOKUP/nvim_plan.raw" 2>/dev/null
+  tr -d '\r' < "$LOOKUP/nvim_plan.raw" | grep -E '^(plugin|mason)'$'\t'
 }
 lk_claude() {
   # Same version numbers as the native build
@@ -356,7 +368,7 @@ if [ -z "${PYTHON_VERSION:-}" ] && has uv; then lookup python "Python" lk_python
 [ -d "$DOTFILES_DIR/.git" ] && lookup dotfiles "dotfiles" git_update "$DOTFILES_DIR"
 [ -d "$OH_MY_TMUX/.git" ] && lookup omt "Oh my tmux!" git_update "$OH_MY_TMUX"
 if [ -d "$DATA_HOME/nvim/lazy/LazyVim" ] && nvim_ok && [ -d "$HOME/.config/nvim" ]; then
-  lookup nvim_plan "nvim plugins, Mason" lk_nvim_plan
+  lookup nvim_plan "nvim plugins, Mason (up to 2 min)" lk_nvim_plan
 fi
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   lookup claude "Claude Code" lk_claude
