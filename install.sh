@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2088 # "~/..." in messages is meant literally
 # One-command installer for a Neovim + tmux development environment.
 #   OS:   macOS, Debian/Ubuntu, Fedora/RHEL/Rocky, Arch, openSUSE, Alpine, WSL
 #   Arch: amd64 / arm64
@@ -164,10 +165,26 @@ CLAUDE_PLUGINS="$(echo ${CLAUDE_PLUGINS:-})" # normalize spaces
 [ "$INSTALL_CLAUDE" = 1 ] && log "Claude Code: yes, plugins: ${CLAUDE_PLUGINS:-none}" || log "Claude Code: skipped"
 
 
-# ---------- What is missing ----------
-# Only things that are not installed yet get installed: existing packages and tools are never
-# upgraded or replaced. The plan is shown first and installed after one confirmation.
+# ---------- What to install or update ----------
+# Shown as a plan with versions, installed after one confirmation:
+#   - system (shared by every user): OS packages that are missing; installed ones are left alone
+#   - this user (~/.local, ~/.claude, ~/.local/share/nvim): installed when missing and updated
+#     to the latest release when a newer one is out
 #
+# Who can change the system: root, Homebrew, or a user with sudo (asked only when needed).
+# NO_SUDO=1 skips sudo.
+SUDO_OK=0
+if [ "$(id -u)" -eq 0 ]; then
+  sudo() { "$@"; }; SUDO_OK=1
+elif [ "$PM" = brew ]; then
+  SUDO_OK=1 # Homebrew does not use sudo
+elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
+  SUDO_OK=2 # ask for the password after the plan, only if there are system changes
+fi
+# Bound slow steps so a network problem cannot hang forever (macOS has no timeout: run as is)
+with_timeout() { local s="$1"; shift; if has timeout; then timeout "$s" "$@"; else "$@"; fi; }
+log "Checking what is installed and the latest versions"
+
 # OS packages as package[:command]. A package counts as installed when the package manager has
 # it or, when a command is given, that command is on PATH (e.g. a git built from source).
 # Required: git, curl, unzip, tar, gzip (Mason downloads), a C compiler (treesitter parsers), tmux, ripgrep
@@ -208,11 +225,50 @@ spec_installed() { # spec_installed PACKAGE[:COMMAND]
   case "$1" in *:*) cmd="${1#*:}" ;; *) has "$1" && return 0 ;; esac
   { [ -n "$cmd" ] && has "$cmd"; } || pkg_installed "$pkg"
 }
+pkg_version() { # pkg_version PACKAGE: version the package manager would install, empty if unknown
+  local v=""
+  case "$PM" in
+    brew)    v="$(brew info "$1" 2>/dev/null || true)"; v="${v%%$'\n'*}"
+             v="$(printf '%s' "$v" | sed -n 's/.*stable \([^ ,]*\).*/\1/p')" ;;
+    apt-get) v="$(apt-cache policy "$1" 2>/dev/null || true)"
+             v="$(printf '%s\n' "$v" | awk '/Candidate:/ {print $2}')" ;;
+    dnf)     v="$(dnf -q repoquery --latest-limit 1 --qf '%{version}-%{release}\n' "$1" 2>/dev/null || true)"; v="${v##*$'\n'}" ;;
+    yum)     v="$(yum -q list available "$1" 2>/dev/null || true)"; v="$(printf '%s\n' "$v" | awk 'NF >= 2 {x = $2} END {print x}')" ;;
+    pacman)  v="$(pacman -Si "$1" 2>/dev/null || true)"; v="$(printf '%s\n' "$v" | awk -F': *' '/^Version/ {print $2}')" ;;
+    zypper)  v="$(zypper -q info "$1" 2>/dev/null || true)"; v="$(printf '%s\n' "$v" | awk -F': *' '/^Version/ {print $2}')" ;;
+    apk)     v="$(apk search -x "$1" 2>/dev/null || true)"; v="${v%%$'\n'*}"; v="${v#"$1"-}" ;;
+  esac
+  [ "$v" = "(none)" ] && v=""
+  printf '%s' "${v%%$'\n'*}"
+}
+pkg_installed_version() { # pkg_installed_version PACKAGE
+  local v=""
+  case "$PM" in
+    brew)    v="$(brew list --versions "$1" 2>/dev/null || true)"; v="${v##* }" ;;
+    apt-get) v="$(dpkg-query -W -f='${Version}' "$1" 2>/dev/null || true)" ;;
+    dnf|yum|zypper) v="$(rpm -q --qf '%{VERSION}-%{RELEASE}\n' --whatprovides "$1" 2>/dev/null || true)" ;;
+    pacman)  v="$(pacman -Q "$1" 2>/dev/null || true)"; v="${v##* }" ;;
+    apk)     v="$(apk info -e -v "$1" 2>/dev/null || true)"; v="${v#"$1"-}" ;;
+  esac
+  printf '%s' "${v%%$'\n'*}"
+}
 MISS_REQ=(); MISS_OPT=()
 for s in "${OS_REQ[@]}"; do spec_installed "$s" || MISS_REQ+=("${s%%:*}"); done
 for s in "${OS_OPT[@]}"; do spec_installed "$s" || MISS_OPT+=("${s%%:*}"); done
 NEED_BREW=0; [ "$PM" = brew ] && ! has brew && NEED_BREW=1
 NEED_OS=0; [ ${#MISS_REQ[@]} -gt 0 ] || [ ${#MISS_OPT[@]} -gt 0 ] || [ "$NEED_BREW" = 1 ] && NEED_OS=1
+# As root, refresh the package index now so the plan can show the versions that will be installed
+# (container images ship without one). It only refreshes metadata, nothing is upgraded.
+INDEX_FRESH=0
+if [ "$NEED_OS" = 1 ] && [ "$(id -u)" -eq 0 ]; then
+  case "$PM" in
+    apt-get) apt-get update -qq >/dev/null 2>&1 || true ;;
+    pacman)  pacman -Sy --noconfirm >/dev/null 2>&1 || true ;;
+    zypper)  zypper --non-interactive -q refresh >/dev/null 2>&1 || true ;;
+    apk)     apk update -q >/dev/null 2>&1 || true ;;
+  esac
+  INDEX_FRESH=1
+fi
 # Older versions of this installer linked /usr/local/bin/tree-sitter to one user's ~/.cargo,
 # which other users cannot run; that link is removed (a system change, so it is in the plan)
 OLD_TS_LINK=0
@@ -221,7 +277,7 @@ if [ -L /usr/local/bin/tree-sitter ]; then
 fi
 NEED_SYS=0; [ "$NEED_OS" = 1 ] || [ "$OLD_TS_LINK" = 1 ] && NEED_SYS=1
 
-# Per-user tools in ~/.local
+# ---- This user's tools: current version (empty = not installed) and latest version ----
 nvim_ok() { # Neovim on PATH and >= 0.11
   local v; v="$(nvim --version 2>/dev/null)" || return 1
   # Capture first, then trim: `nvim --version | head -1` can die of SIGPIPE (exit 141) under pipefail
@@ -231,46 +287,99 @@ nvim_ok() { # Neovim on PATH and >= 0.11
 }
 node_ok() { has node && [ "$(node -v | cut -d. -f1 | tr -d v)" -ge 18 ]; }
 ts_works() { local v; v="$("$1" --version 2>&1)" || return 1; case "$v" in *GLIBC*) return 1 ;; esac; return 0; }
-# This user's own Neovim and Node.js (glibc Linux) are kept at the latest release: installed when
-# missing, updated when a newer one is out. macOS and Alpine use the package manager's builds,
-# which are installed when missing and otherwise left alone.
-latest_url() { # final URL after redirects, empty on failure
-  if has curl; then curl -fsSLI --connect-timeout 20 -o /dev/null -w '%{url_effective}' "$1" 2>/dev/null || true
-  else wget -S --spider --max-redirect=0 "$1" 2>&1 | awk '/^ *Location:/ {print $2}' | tail -1 || true; fi
+first_line() { printf '%s' "${1%%$'\n'*}"; }
+gh_latest() { # gh_latest OWNER/REPO: tag of the latest GitHub release, empty on failure
+  local u=""
+  if has curl; then u="$(curl -fsSL --connect-timeout 20 -o /dev/null -w '%{url_effective}' "https://github.com/$1/releases/latest" 2>/dev/null || true)"
+  else u="$(wget -S --spider --max-redirect=0 "https://github.com/$1/releases/latest" 2>&1 || true)"
+       u="$(printf '%s\n' "$u" | awk '/^ *Location:/ {x = $2} END {print x}')"; fi
+  case "$u" in */tag/*) printf '%s' "${u##*/tag/}" ;; esac
 }
+outdated() { # outdated CURRENT LATEST: true when not installed, or a newer version is known
+  [ -z "$1" ] || { [ -n "$2" ] && [ "$1" != "$2" ]; }
+}
+# Neovim / Node.js: own copies on glibc Linux; macOS and Alpine use the package manager's builds
 NVIM_CUR=""; NVIM_LATEST=""; NEED_NVIM=0
 if [ "$USE_PM_NVIM" = 0 ]; then
-  v="$("$LOCAL_OPT/nvim/bin/nvim" --version 2>/dev/null || true)"; v="${v%%$'\n'*}"; NVIM_CUR="${v#NVIM }"
-  v="$(latest_url https://github.com/neovim/neovim/releases/latest)"; NVIM_LATEST="${v##*/tag/}"
+  NVIM_CUR="$(first_line "$("$LOCAL_OPT/nvim/bin/nvim" --version 2>/dev/null || true)")"; NVIM_CUR="${NVIM_CUR#NVIM }"
+  NVIM_LATEST="$(gh_latest neovim/neovim)"
   case "$NVIM_LATEST" in v[0-9]*) ;; *) NVIM_LATEST="" ;; esac
-  if [ -z "$NVIM_CUR" ] || { [ -n "$NVIM_LATEST" ] && [ "$NVIM_LATEST" != "$NVIM_CUR" ]; }; then NEED_NVIM=1; fi
+  outdated "$NVIM_CUR" "$NVIM_LATEST" && NEED_NVIM=1
 fi
 NODE_CUR=""; NODE_LATEST=""; NEED_NODE=0
 if [ "$USE_PM_NODE" = 0 ]; then
   NODE_CUR="$("$LOCAL_OPT/node/bin/node" -v 2>/dev/null || true)"
   # Latest LTS: first row of index.tab whose lts column is set (capture first: awk exits early)
   v="$(fetch_once https://nodejs.org/dist/index.tab 2>/dev/null || true)"
-  NODE_LATEST="$(printf '%s\n' "$v" | awk -F'\t' 'NR > 1 && $10 != "-" && $10 != "" {print $1; exit}')"
-  if [ -z "$NODE_CUR" ] || { [ -n "$NODE_LATEST" ] && [ "$NODE_LATEST" != "$NODE_CUR" ]; }; then NEED_NODE=1; fi
+  NODE_LATEST="$(printf '%s\n' "$v" | awk -F'\t' 'NR > 1 && $10 != "-" && $10 != "" && !x {x = $1} END {print x}')"
+  outdated "$NODE_CUR" "$NODE_LATEST" && NEED_NODE=1
 fi
-NEED_TS=0
-if [ "$PM" != brew ] && [ "$PM" != apk ] && ! ts_works "$LOCAL_BIN/tree-sitter"; then NEED_TS=1; fi
-NEED_UV=0; has uv || NEED_UV=1
-NEED_PY=0; [ -x "$LOCAL_BIN/python3" ] || NEED_PY=1
-PYTHON_VERSION="${PYTHON_VERSION:-3.13}"
+# tree-sitter CLI (brew / apk: package manager)
+TS_CUR=""; TS_LATEST=""; NEED_TS=0
+if [ "$PM" != brew ] && [ "$PM" != apk ]; then
+  if ts_works "$LOCAL_BIN/tree-sitter"; then
+    TS_CUR="$("$LOCAL_BIN/tree-sitter" --version 2>/dev/null || true)"; TS_CUR="$(printf '%s' "$TS_CUR" | awk '{print "v" $2}')"
+  fi
+  TS_LATEST="$(gh_latest tree-sitter/tree-sitter)"
+  outdated "$TS_CUR" "$TS_LATEST" && NEED_TS=1
+fi
+# uv and Python, both in ~/.local/bin. PYTHON_VERSION=3.13 pins a version; default is the latest.
+UV_CUR=""; [ -x "$LOCAL_BIN/uv" ] && UV_CUR="$("$LOCAL_BIN/uv" --version 2>/dev/null | awk '{print $2}' || true)"
+UV_LATEST="$(gh_latest astral-sh/uv)"
+NEED_UV=0; outdated "$UV_CUR" "$UV_LATEST" && NEED_UV=1
+PY_CUR=""; [ -x "$LOCAL_BIN/python3" ] && PY_CUR="$("$LOCAL_BIN/python3" --version 2>/dev/null | awk '{print $2}' || true)"
+PY_LATEST=""
+if [ -n "${PYTHON_VERSION:-}" ]; then
+  PY_LATEST="$PYTHON_VERSION"
+elif [ -x "$LOCAL_BIN/uv" ] || has uv; then
+  # Newest stable CPython uv can download (skips alpha/beta/rc and free-threaded builds)
+  v="$("$(command -v uv)" python list 2>/dev/null || true)"
+  PY_LATEST="$(printf '%s\n' "$v" | sed -n 's/^cpython-\([0-9]*\.[0-9]*\.[0-9]*\)-.*/\1/p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
+fi
+NEED_PY=0
+if [ -z "$PY_CUR" ]; then NEED_PY=1
+elif [ -n "${PYTHON_VERSION:-}" ]; then case "$PY_CUR" in "$PYTHON_VERSION"|"$PYTHON_VERSION".*) ;; *) NEED_PY=1 ;; esac
+elif outdated "$PY_CUR" "$PY_LATEST"; then NEED_PY=1; fi
 
-# Configuration
+# Configuration repos (git): cloned when missing, fast-forwarded when the remote has new commits
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 OH_MY_TMUX="$DATA_HOME/oh-my-tmux"
-NEED_DOTFILES=0; [ -d "$DOTFILES_DIR/.git" ] || NEED_DOTFILES=1
-NEED_OMT=0; [ -d "$OH_MY_TMUX/.git" ] || NEED_OMT=1
-NEED_LAZY=0; [ -d "$DATA_HOME/nvim/lazy/LazyVim" ] || NEED_LAZY=1
+git_update() { # git_update DIR: "OLD NEW COUNT" when the upstream is ahead, empty otherwise
+  local d="$1" n
+  git -c safe.directory="$d" -C "$d" fetch -q 2>/dev/null || return 0
+  n="$(git -c safe.directory="$d" -C "$d" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0)"
+  [ "$n" -gt 0 ] 2>/dev/null || return 0
+  printf '%s %s %s' "$(git -c safe.directory="$d" -C "$d" rev-parse --short HEAD)" \
+    "$(git -c safe.directory="$d" -C "$d" rev-parse --short '@{u}')" "$n"
+}
+NEED_DOTFILES=0; DOTFILES_UPD=""
+if [ -d "$DOTFILES_DIR/.git" ]; then DOTFILES_UPD="$(git_update "$DOTFILES_DIR")"; else NEED_DOTFILES=1; fi
+NEED_OMT=0; OMT_UPD=""
+if [ -d "$OH_MY_TMUX/.git" ]; then OMT_UPD="$(git_update "$OH_MY_TMUX")"; else NEED_OMT=1; fi
+
+# nvim plugins (latest commits) and Mason packages (latest versions), from LazyVim itself
+NEED_LAZY=0; NVIM_PLAN=""
+if [ ! -d "$DATA_HOME/nvim/lazy/LazyVim" ]; then
+  NEED_LAZY=1
+elif nvim_ok && [ -d "$HOME/.config/nvim" ]; then
+  NVIM_PLAN="$(with_timeout 300 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').plan()" 2>/dev/null || true)"
+  NVIM_PLAN="$(printf '%s\n' "$NVIM_PLAN" | tr -d '\r' | grep -E '^(plugin|mason)'$'\t' || true)"
+fi
 
 # Claude Code and the chosen plugins / skills that are not installed yet
-NEED_CLAUDE=0; MISS_PLUGINS=""
+NEED_CLAUDE=0; CLAUDE_CUR=""; CLAUDE_LATEST=""; MISS_PLUGINS=""
 INSTALLED_PLUGINS=""
 if [ "$INSTALL_CLAUDE" = 1 ]; then
-  if has claude; then INSTALLED_PLUGINS="$(claude plugin list 2>/dev/null || true)"; else NEED_CLAUDE=1; fi
+  # Same version numbers as the native build
+  v="$(fetch_once https://registry.npmjs.org/@anthropic-ai/claude-code/latest 2>/dev/null || true)"
+  CLAUDE_LATEST="$(printf '%s' "$v" | grep -o '"version":"[^"]*"' | sed -n '1s/.*:"\(.*\)"/\1/p' || true)"
+  if has claude; then
+    INSTALLED_PLUGINS="$(claude plugin list 2>/dev/null || true)"
+    CLAUDE_CUR="$(claude --version 2>/dev/null | awk '{print $1}' || true)"
+    outdated "$CLAUDE_CUR" "$CLAUDE_LATEST" && NEED_CLAUDE=1
+  else
+    NEED_CLAUDE=1
+  fi
   plugin_source() { # plugin_source NAME -> official | knowledge-work | skill
     local e; for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do
       if [ "${e%%|*}" = "$1" ]; then e="${e#*|}"; echo "${e%%|*}"; return; fi
@@ -287,23 +396,21 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
   MISS_PLUGINS="$(echo $MISS_PLUGINS)"
 fi
 
-# Who can install OS packages: root, Homebrew, or a user with sudo (asked only when needed).
-# NO_SUDO=1 skips sudo.
-SUDO_OK=0
-if [ "$(id -u)" -eq 0 ]; then
-  sudo() { "$@"; }; SUDO_OK=1
-elif [ "$PM" = brew ]; then
-  SUDO_OK=1 # Homebrew does not use sudo
-elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
-  SUDO_OK=2 # ask for the password after the plan, only if OS packages are missing
-fi
-
 # ---------- Plan ----------
 # Two parts: system changes (shared by every user, need sudo / Homebrew) and changes that stay
-# in this user's home. Only items that are not installed yet are listed.
+# in this user's home. Each line shows the version: "new 1.2" or "1.1 -> 1.2".
 SYS_PLAN=(); USER_PLAN=()
-sys_plan()  { SYS_PLAN+=("$(printf '     %-22s %s' "$1" "$2")"); }
-user_plan() { USER_PLAN+=("$(printf '     %-22s %s' "$1" "$2")"); }
+sys_plan()  { SYS_PLAN+=("$1"$'\t'"$2"); }
+user_plan() { USER_PLAN+=("$1"$'\t'"$2"); }
+print_rows() { # print_rows "NAME<TAB>DETAIL"...: aligned in two columns
+  printf '%s\n' "$@" | awk -F'\t' '{ n[NR] = $1; d[NR] = $2; if (length($1) > w) w = length($1) }
+    END { for (i = 1; i <= NR; i++) printf "     %-" w "s  %s\n", n[i], d[i] }'
+}
+change()    { # change CURRENT LATEST [WHERE]: "new X" or "X -> Y"
+  local to="${2:-latest}"
+  if [ -n "$1" ]; then printf '%s -> %s' "$1" "$to"; else printf 'new %s' "$to"; fi
+  [ -z "${3:-}" ] || printf ', %s' "$3"
+}
 case "$PM" in
   brew)    PM_CMD="brew install" ;;
   apt-get) PM_CMD="apt-get install" ;;
@@ -312,38 +419,49 @@ case "$PM" in
   *)       PM_CMD="$PM install" ;;
 esac
 if [ "$NEED_OS" = 1 ]; then
-  [ "$NEED_BREW" = 1 ] && sys_plan "Homebrew" "installs into /opt/homebrew (or /usr/local), asks for sudo once"
-  case "$PM" in
-    apt-get) sys_plan "package index" "apt-get update (refresh only, nothing upgraded)" ;;
-    pacman)  sys_plan "package index" "pacman -Sy (refresh only, nothing upgraded)" ;;
-    zypper)  sys_plan "package index" "zypper refresh (refresh only, nothing upgraded)" ;;
-    apk)     sys_plan "package index" "apk update (refresh only, nothing upgraded)" ;;
-  esac
-  [ ${#MISS_REQ[@]} -gt 0 ] && sys_plan "OS packages" "$PM_CMD ${MISS_REQ[*]}"
-  [ ${#MISS_OPT[@]} -gt 0 ] && sys_plan "optional OS packages" "$PM_CMD ${MISS_OPT[*]} (skipped if not available)"
+  [ "$NEED_BREW" = 1 ] && sys_plan "Homebrew" "new, in /opt/homebrew (or /usr/local), asks for sudo once"
+  if [ "$INDEX_FRESH" = 0 ]; then
+    case "$PM" in
+      apt-get) sys_plan "package index" "apt-get update (refresh only, nothing upgraded)" ;;
+      pacman)  sys_plan "package index" "pacman -Sy (refresh only, nothing upgraded)" ;;
+      zypper)  sys_plan "package index" "zypper refresh (refresh only, nothing upgraded)" ;;
+      apk)     sys_plan "package index" "apk update (refresh only, nothing upgraded)" ;;
+    esac
+  fi
+  for p in ${MISS_REQ[@]+"${MISS_REQ[@]}"}; do v="$(pkg_version "$p")"; sys_plan "$p" "new ${v:-(version from the package index)}, $PM_CMD"; done
+  for p in ${MISS_OPT[@]+"${MISS_OPT[@]}"}; do v="$(pkg_version "$p")"; sys_plan "$p" "new ${v:-(version from the package index)}, $PM_CMD, optional"; done
 fi
 [ "$OLD_TS_LINK" = 1 ] && sys_plan "old link" "rm /usr/local/bin/tree-sitter (points into one user's ~/.cargo)"
-if [ "$NEED_NVIM" = 1 ]; then
-  if [ -n "$NVIM_CUR" ]; then user_plan "Neovim ${NVIM_LATEST:-latest}" "update from $NVIM_CUR, in ~/.local/opt/nvim"
-  else user_plan "Neovim ${NVIM_LATEST:-latest}" "in ~/.local/opt/nvim"; fi
+[ "$NEED_NVIM" = 1 ]     && user_plan "Neovim" "$(change "$NVIM_CUR" "$NVIM_LATEST" "~/.local/opt/nvim")"
+[ "$NEED_NODE" = 1 ]     && user_plan "Node.js (LTS)" "$(change "$NODE_CUR" "$NODE_LATEST" "~/.local/opt/node")"
+[ "$NEED_TS" = 1 ]       && user_plan "tree-sitter CLI" "$(change "$TS_CUR" "$TS_LATEST" "~/.local/opt/tree-sitter-cli")"
+[ "$NEED_UV" = 1 ]       && user_plan "uv" "$(change "$UV_CUR" "$UV_LATEST" "~/.local/bin")"
+[ "$NEED_PY" = 1 ]       && user_plan "Python" "$(change "$PY_CUR" "$PY_LATEST" "with uv, python3 in ~/.local/bin")"
+[ "$NEED_DOTFILES" = 1 ] && user_plan "dotfiles" "new, clone to $DOTFILES_DIR"
+if [ -n "$DOTFILES_UPD" ]; then set -- $DOTFILES_UPD; user_plan "dotfiles" "$1 -> $2 ($3 new commits)"; fi
+[ "$NEED_OMT" = 1 ]      && user_plan "Oh my tmux!" "new, latest commit"
+if [ -n "$OMT_UPD" ]; then set -- $OMT_UPD; user_plan "Oh my tmux!" "$1 -> $2 ($3 new commits)"; fi
+[ "$NEED_LAZY" = 1 ]     && user_plan "nvim plugins" "new: LazyVim, LSP servers, formatters, parsers (latest)"
+if [ -n "$NVIM_PLAN" ]; then
+  while IFS=$'\t' read -r kind name from to; do
+    case "$kind" in
+      plugin) user_plan "nvim plugin $name" "$from -> $to" ;;
+      mason)  if [ "$from" = "-" ]; then user_plan "Mason $name" "new $to"; else user_plan "Mason $name" "$from -> $to"; fi ;;
+    esac
+  done <<EOF
+$NVIM_PLAN
+EOF
 fi
-if [ "$NEED_NODE" = 1 ]; then
-  if [ -n "$NODE_CUR" ]; then user_plan "Node.js ${NODE_LATEST:-LTS}" "latest LTS, update from $NODE_CUR, in ~/.local/opt/node"
-  else user_plan "Node.js ${NODE_LATEST:-LTS}" "latest LTS, in ~/.local/opt/node"; fi
-fi
-[ "$NEED_TS" = 1 ]       && user_plan "tree-sitter CLI" "in ~/.local/opt/tree-sitter-cli (built with cargo on old glibc)"
-[ "$NEED_UV" = 1 ]       && user_plan "uv" "in ~/.local/bin"
-[ "$NEED_PY" = 1 ]       && user_plan "Python $PYTHON_VERSION" "with uv, python3 in ~/.local/bin"
-[ "$NEED_DOTFILES" = 1 ] && user_plan "dotfiles" "clone to $DOTFILES_DIR"
-[ "$NEED_OMT" = 1 ]      && user_plan "Oh my tmux!" "clone to $OH_MY_TMUX"
-[ "$NEED_LAZY" = 1 ]     && user_plan "nvim plugins" "LazyVim, LSP servers, formatters, parsers in ~/.local/share/nvim"
-[ "$NEED_CLAUDE" = 1 ]   && user_plan "Claude Code" "native installer, in ~/.local/bin"
-[ -n "$MISS_PLUGINS" ]   && user_plan "Claude plugins" "$MISS_PLUGINS (in ~/.claude)"
+[ "$NEED_CLAUDE" = 1 ]   && user_plan "Claude Code" "$(change "$CLAUDE_CUR" "$CLAUDE_LATEST" "~/.local/bin")"
+for p in $MISS_PLUGINS; do
+  if [ "$(plugin_source "$p")" = skill ]; then user_plan "Claude skill $p" "new, latest"
+  else user_plan "Claude plugin $p" "new, latest"; fi
+done
 
 if [ ${#SYS_PLAN[@]} -eq 0 ] && [ ${#USER_PLAN[@]} -eq 0 ]; then
-  log "Everything is already installed; updating the config and adding any missing nvim plugins"
+  log "Everything is installed and up to date"
 else
-  log "Not installed yet:"
+  log "To install or update:"
   if [ ${#SYS_PLAN[@]} -gt 0 ]; then
     case "$SUDO_OK" in
       0) echo "   System, for every user (no sudo: NOT changed, ask an admin):" ;;
@@ -351,18 +469,16 @@ else
          else echo "   System, for every user (as root):"; fi ;;
       2) echo "   System, for every user (sudo, asks for your password):" ;;
     esac
-    printf '%s
-' "${SYS_PLAN[@]}"
+    print_rows "${SYS_PLAN[@]}"
   fi
   if [ ${#USER_PLAN[@]} -gt 0 ]; then
     echo "   Only you ($(id -un)), in ~, no sudo:"
-    printf '%s
-' "${USER_PLAN[@]}"
+    print_rows "${USER_PLAN[@]}"
   fi
-  echo "   Anything else already installed is left as it is."
+  echo "   Installed OS packages are left as they are; everything else is kept at the latest release."
   if [ "$HAS_TTY" = 1 ] && [ "${ASSUME_YES:-0}" != 1 ]; then
-    ask "Install these? [Y/n]" y
-    case "$REPLY" in [Nn]*) log "Nothing installed"; exit 0 ;; esac
+    ask "Continue? [Y/n]" y
+    case "$REPLY" in [Nn]*) log "Nothing changed"; exit 0 ;; esac
   fi
 fi
 
@@ -397,18 +513,21 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
     sys_did "Homebrew"
   fi
   # Refresh the package index (does not upgrade anything)
-  case "$PM" in
-    apt-get) sudo apt-get update || true ;;
-    pacman)  sudo pacman -Sy --noconfirm ;;
-    zypper)  sudo zypper --non-interactive refresh || true ;;
-    apk)     sudo apk update ;;
-  esac
+  if [ "$INDEX_FRESH" = 0 ]; then
+    case "$PM" in
+      apt-get) sudo apt-get update || true ;;
+      pacman)  sudo pacman -Sy --noconfirm ;;
+      zypper)  sudo zypper --non-interactive refresh || true ;;
+      apk)     sudo apk update ;;
+    esac
+  fi
   if [ ${#MISS_REQ[@]} -gt 0 ]; then
     pm_add "${MISS_REQ[@]}" || die "could not install OS packages: ${MISS_REQ[*]}"
-    sys_did "OS packages: ${MISS_REQ[*]}"
+    for p in "${MISS_REQ[@]}"; do sys_did "$p $(pkg_installed_version "$p")"; done
   fi
   for p in ${MISS_OPT[@]+"${MISS_OPT[@]}"}; do
-    if pm_add "$p" >/dev/null 2>&1; then sys_did "OS package: $p"; else failed "$p (optional OS package, not available)"; fi
+    if pm_add "$p" >/dev/null 2>&1; then sys_did "$p $(pkg_installed_version "$p")"
+    else failed "$p (optional OS package, not available)"; fi
   done
   hash -r
 elif [ "$NEED_OS" = 1 ]; then
@@ -463,8 +582,9 @@ node_ok || warn "Node.js >= 18 not found, JS-based LSPs (pyright, ts_ls...) will
 # ---------- tree-sitter CLI (nvim-treesitter uses it to compile parsers) ----------
 if [ "$NEED_TS" = 1 ] && has npm; then
   # npm package in ~/.local/opt/tree-sitter-cli; works with any Node.js, no global install
-  log "Installing tree-sitter CLI in ~/.local/opt/tree-sitter-cli"
-  npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" tree-sitter-cli >/dev/null
+  log "Installing tree-sitter CLI ${TS_LATEST:-latest} in ~/.local/opt/tree-sitter-cli"
+  npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" "tree-sitter-cli@${TS_LATEST#v}" >/dev/null 2>&1 \
+    || npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" tree-sitter-cli@latest >/dev/null
   ln -sf "$LOCAL_OPT/tree-sitter-cli/node_modules/.bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
   hash -r
   # The prebuilt binary needs glibc 2.39. On older systems (Debian 12, RHEL 9, Ubuntu 22.04)
@@ -477,11 +597,15 @@ if [ "$NEED_TS" = 1 ] && has npm; then
       did "Rust (rustup, in ~/.cargo)"
     fi
     CARGO="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
-    "$CARGO" install --locked tree-sitter-cli
+    if [ -n "$TS_LATEST" ]; then "$CARGO" install --locked --force tree-sitter-cli --version "${TS_LATEST#v}"
+    else "$CARGO" install --locked --force tree-sitter-cli; fi
     ln -sf "$HOME/.cargo/bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
     hash -r
   fi
-  ts_works "$LOCAL_BIN/tree-sitter" && did "tree-sitter CLI $(tree-sitter --version | awk '{print $2}')" || failed "tree-sitter CLI"
+  if ts_works "$LOCAL_BIN/tree-sitter"; then
+    v="v$("$LOCAL_BIN/tree-sitter" --version | awk '{print $2}')"
+    if [ -n "$TS_CUR" ]; then did "tree-sitter CLI $v (was $TS_CUR)"; else did "tree-sitter CLI $v"; fi
+  else failed "tree-sitter CLI"; fi
 fi
 if [ "$OLD_TS_LINK" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   sudo rm -f /usr/local/bin/tree-sitter && sys_did "removed old link /usr/local/bin/tree-sitter"
@@ -500,23 +624,30 @@ fi
 # ---------- uv and Python (per user) ----------
 # uv installs into ~/.local/bin; `uv python install --default` adds python3 there too, so
 # Mason's Python tools (and the user) get a recent Python with venv and pip, no sudo needed.
-if [ "$NEED_UV" = 1 ]; then
-  log "Installing uv in ~/.local/bin"
+if [ "$NEED_UV" = 1 ] && [ -n "$UV_CUR" ]; then
+  log "Updating uv to ${UV_LATEST:-latest}"
+  if "$LOCAL_BIN/uv" self update -q; then did "uv $("$LOCAL_BIN/uv" --version | awk '{print $2}') (was $UV_CUR)"
+  else failed "uv update"; fi
+elif [ "$NEED_UV" = 1 ]; then
+  log "Installing uv ${UV_LATEST:-latest} in ~/.local/bin"
   fetch https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh "$TMP/uv-installer.sh"
-  if env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$LOCAL_BIN" sh "$TMP/uv-installer.sh" --quiet && has uv; then
-    did "$(uv --version)"
+  if env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$LOCAL_BIN" sh "$TMP/uv-installer.sh" --quiet && [ -x "$LOCAL_BIN/uv" ]; then
+    did "uv $("$LOCAL_BIN/uv" --version | awk '{print $2}')"
   else
     failed "uv"
   fi
-  hash -r
 fi
+hash -r
 if [ "$NEED_PY" = 1 ] && has uv; then
-  log "Installing Python $PYTHON_VERSION with uv"
+  # Without a version, uv picks the newest stable Python
+  PY_ARG=(); [ -n "$PY_LATEST" ] && PY_ARG=("$PY_LATEST")
+  log "Installing Python ${PY_LATEST:-latest} with uv"
   # --default (adds python / python3 next to python3.X) is marked experimental; hide that warning
-  if uv python install --default "$PYTHON_VERSION" >"$TMP/uv-python.log" 2>&1 && [ -x "$LOCAL_BIN/python3" ]; then
-    hash -r; did "$(python3 --version) (uv)"
+  if uv python install --default ${PY_ARG[@]+"${PY_ARG[@]}"} >"$TMP/uv-python.log" 2>&1 && [ -x "$LOCAL_BIN/python3" ]; then
+    hash -r; v="$("$LOCAL_BIN/python3" --version | awk '{print $2}')"
+    if [ -n "$PY_CUR" ]; then did "Python $v (was $PY_CUR)"; else did "Python $v"; fi
   else
-    cat "$TMP/uv-python.log" >&2; failed "Python $PYTHON_VERSION (uv)"
+    cat "$TMP/uv-python.log" >&2; failed "Python ${PY_LATEST:-latest} (uv)"
   fi
 fi
 
@@ -524,8 +655,11 @@ fi
 log "Linking dotfiles"
 if [ "$NEED_DOTFILES" = 0 ]; then
   # safe.directory: allow running as a different user than the repo owner (e.g. root in a container)
-  git -c safe.directory="$DOTFILES_DIR" -C "$DOTFILES_DIR" pull -q --ff-only \
-    || warn "git pull skipped (local changes, detached HEAD or no remote)"
+  if git -c safe.directory="$DOTFILES_DIR" -C "$DOTFILES_DIR" pull -q --ff-only 2>/dev/null; then
+    if [ -n "$DOTFILES_UPD" ]; then set -- $DOTFILES_UPD; did "dotfiles $1 -> $2"; fi
+  else
+    warn "git pull skipped (local changes, detached HEAD or no remote)"
+  fi
 else
   git clone -q "$DOTFILES_REPO" "$DOTFILES_DIR"
   did "dotfiles ($DOTFILES_DIR)"
@@ -541,10 +675,12 @@ link "$DOTFILES_DIR/nvim" "$HOME/.config/nvim"
 
 # tmux: Oh my tmux! (https://github.com/gpakosz/.tmux) plus this repo's tmux/tmux.conf.local
 if [ "$NEED_OMT" = 0 ]; then
-  git -C "$OH_MY_TMUX" pull --ff-only -q || warn "could not update Oh my tmux!"
+  if git -C "$OH_MY_TMUX" pull --ff-only -q; then
+    if [ -n "$OMT_UPD" ]; then set -- $OMT_UPD; did "Oh my tmux! $1 -> $2"; fi
+  else warn "could not update Oh my tmux!"; fi
 else
-  git clone -q --depth 1 https://github.com/gpakosz/.tmux "$OH_MY_TMUX"
-  did "Oh my tmux!"
+  git clone -q https://github.com/gpakosz/.tmux "$OH_MY_TMUX"
+  did "Oh my tmux! $(git -C "$OH_MY_TMUX" rev-parse --short HEAD)"
 fi
 link "$OH_MY_TMUX/.tmux.conf" "$HOME/.tmux.conf"
 link "$DOTFILES_DIR/tmux/tmux.conf.local" "$HOME/.tmux.conf.local"
@@ -565,18 +701,31 @@ done
 # Only missing ones are installed: `Lazy! install` does not update plugins (use :Lazy update),
 # and Mason / treesitter skip what is already there.
 # Bound every step so a network problem cannot hang forever (macOS has no timeout: run as is)
-with_timeout() { local s="$1"; shift; if has timeout; then timeout "$s" "$@"; else "$@"; fi; }
-log "Installing missing nvim plugins (LazyVim)"
-with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! install" +qa || warn "Lazy install failed or timed out, run :Lazy install"
+# Lazy sync: install missing plugins and update all of them to the latest commit
+log "Installing and updating nvim plugins (LazyVim)"
+if with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! sync" +qa; then
+  printf '%s\n' "$NVIM_PLAN" | while IFS=$'\t' read -r kind name from to; do
+    if [ "$kind" = plugin ]; then echo "nvim plugin $name $from -> $to"; fi
+  done > "$TMP/plugins.done"
+  while IFS= read -r l; do did "$l"; done < "$TMP/plugins.done"
+else
+  failed "nvim plugins (Lazy sync failed or timed out, run :Lazy sync)"
+fi
 
-log "Installing missing LSP servers, formatters and treesitter parsers"
+log "Installing and updating LSP servers, formatters and treesitter parsers"
 # CFLAGS: tree-sitter's default flags include -Wall, which makes gcc 12.2 (Debian 12) spend
 # minutes on large generated parsers such as gitcommit. config/options.lua sets the same default.
 export CFLAGS="${CFLAGS:--O2}"
 # DOTFILES_HEADLESS_INSTALL stops LazyVim's background parser builds; headless.lua builds them
 # itself and waits for every Mason package and parser to finish (see nvim/lua/dotfiles/headless.lua)
 if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install()"; then
-  [ "$NEED_LAZY" = 1 ] && did "nvim plugins, LSP servers, formatters and parsers"
+  [ "$NEED_LAZY" = 1 ] && did "nvim plugins, LSP servers, formatters and parsers (latest)"
+  printf '%s\n' "$NVIM_PLAN" | while IFS=$'\t' read -r kind name from to; do
+    if [ "$kind" = mason ]; then
+      if [ "$from" = "-" ]; then echo "Mason $name $to"; else echo "Mason $name $from -> $to"; fi
+    fi
+  done > "$TMP/mason.done"
+  while IFS= read -r l; do did "$l"; done < "$TMP/mason.done"
 else
   failed "some LSP servers or parsers (open nvim and check :Mason and :checkhealth)"
 fi
@@ -593,8 +742,12 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
     fi
   fi
   # Native installer: updates itself in the background, so it is only run when claude is missing
-  if [ "$NEED_CLAUDE" = 1 ]; then
-    log "Installing Claude Code"
+  if [ "$NEED_CLAUDE" = 1 ] && [ -n "$CLAUDE_CUR" ]; then
+    log "Updating Claude Code to ${CLAUDE_LATEST:-latest}"
+    if claude update >/dev/null 2>&1; then did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}') (was $CLAUDE_CUR)"
+    else failed "Claude Code update (run: claude update)"; fi
+  elif [ "$NEED_CLAUDE" = 1 ]; then
+    log "Installing Claude Code ${CLAUDE_LATEST:-latest}"
     fetch https://claude.ai/install.sh "$TMP/claude-install.sh"
     bash "$TMP/claude-install.sh"
     . "$DOTFILES_DIR/shell/env.sh"; hash -r

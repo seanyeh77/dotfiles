@@ -1,6 +1,7 @@
 -- Headless install and inspection helpers, used by install.sh and ci/verify.lua.
 --
---   nvim --headless -c "lua require('dotfiles.headless').install()"   install everything, then quit
+--   nvim --headless -c "lua require('dotfiles.headless').install()"   install / update everything, then quit
+--   nvim --headless -c "lua require('dotfiles.headless').plan()"      list what install() would change
 --
 -- The lists come from LazyVim itself (its core plus the extras in config/lazy.lua), so this file
 -- never repeats which languages are configured.
@@ -72,43 +73,58 @@ function M.collect()
   return collected
 end
 
---- Install every Mason package, waiting until each one succeeded or failed.
----@return string[] failed
-local function install_mason(names, timeout_ms)
+--- Mason packages to install or update: { name, from (nil when new), to }
+local function mason_todo(names)
   local mr = require("mason-registry") -- already refreshed by M.collect()
-  local pending, failed = {}, {}
+  local todo, unknown = {}, {}
   for _, name in ipairs(names) do
     local ok, pkg = pcall(mr.get_package, name)
     if not ok then
-      table.insert(failed, name .. " (not in registry)")
-    elseif not pkg:is_installed() then
-      pending[name] = pkg
+      table.insert(unknown, name .. " (not in registry)")
+    else
+      local okv, latest = pcall(pkg.get_latest_version, pkg)
+      latest = okv and latest or nil
+      if not pkg:is_installed() then
+        table.insert(todo, { name = name, pkg = pkg, to = latest })
+      else
+        local from = pkg:get_installed_version()
+        if latest and from and from ~= latest then
+          table.insert(todo, { name = name, pkg = pkg, from = from, to = latest })
+        end
+      end
     end
   end
-  M._on_failed = function(pkg)
-    if pending[pkg.name] then
-      pending[pkg.name] = nil
-      table.insert(failed, pkg.name)
-    end
-  end
-  if not M._listening then
-    M._listening = true
-    mr:on("package:install:failed", function(pkg)
-      M._on_failed(pkg)
-    end)
-  end
-  for name, pkg in pairs(pending) do
+  return todo, unknown
+end
+
+--- Install missing Mason packages and update outdated ones, waiting until each one succeeded
+--- or failed.
+---@return string[] failed
+local function install_mason(names, timeout_ms)
+  local todo, failed = mason_todo(names)
+  local pending = {}
+  for _, t in ipairs(todo) do
+    local pkg = t.pkg
     if not pkg:is_installing() then -- LazyVim may already have started it
-      out("  mason: installing " .. name)
+      pending[t.name] = true
+      pkg:once("install:success", function()
+        pending[t.name] = nil
+      end)
+      pkg:once("install:failed", function()
+        if pending[t.name] then
+          pending[t.name] = nil
+          table.insert(failed, t.name)
+        end
+      end)
+      if t.from then
+        out(("  mason: updating %s %s -> %s"):format(t.name, t.from, t.to or "latest"))
+      else
+        out(("  mason: installing %s %s"):format(t.name, t.to or ""))
+      end
       pkg:install()
     end
   end
   vim.wait(timeout_ms, function()
-    for name, pkg in pairs(pending) do
-      if pkg:is_installed() then
-        pending[name] = nil
-      end
-    end
     return next(pending) == nil
   end, 500)
   for name in pairs(pending) do
@@ -116,6 +132,32 @@ local function install_mason(names, timeout_ms)
   end
   table.sort(failed)
   return failed
+end
+
+--- Print what an install would change, one tab-separated line each, then quit:
+---   plugin  NAME  FROM  TO      (lazy.nvim commits)
+---   mason   NAME  FROM|-  TO    (Mason package versions)
+function M.plan()
+  local ok, err = pcall(function()
+    local Config = require("lazy.core.config")
+    require("lazy.manage").check({ wait = true, show = false })
+    local names = vim.tbl_keys(Config.plugins)
+    table.sort(names)
+    for _, name in ipairs(names) do
+      local u = Config.plugins[name]._.updates
+      if u and u.from and u.to and u.from.commit and u.to.commit then
+        out(("plugin\t%s\t%s\t%s"):format(name, u.from.commit:sub(1, 7), u.to.commit:sub(1, 7)))
+      end
+    end
+    local todo = mason_todo(M.collect().mason)
+    for _, t in ipairs(todo) do
+      out(("mason\t%s\t%s\t%s"):format(t.name, t.from or "-", t.to or "latest"))
+    end
+  end)
+  if not ok then
+    out("error\t" .. tostring(err):gsub("[\t\n]", " "))
+  end
+  vim.cmd("qa!")
 end
 
 --- Compile every treesitter parser (two rounds: parallel builds occasionally fail).
@@ -148,7 +190,7 @@ local function install_ts(langs, timeout_ms)
   return missing()
 end
 
---- Install Mason packages and treesitter parsers, report, then quit nvim (exit 1 on failures).
+--- Install or update Mason packages and treesitter parsers, report, then quit nvim (exit 1 on failures).
 function M.install()
   M.failed = 0
   local ok, err = pcall(function()
@@ -168,6 +210,10 @@ function M.install()
     end
     out("Treesitter parsers: " .. table.concat(want.ts, " "))
     local missing = install_ts(want.ts, 5 * 60 * 1000)
+    -- Rebuild parsers whose revision changed in the updated nvim-treesitter
+    pcall(function()
+      require("nvim-treesitter").update():wait(5 * 60 * 1000)
+    end)
     if #failed > 0 then
       out("!! Mason packages not installed: " .. table.concat(failed, ", "))
     end

@@ -44,6 +44,8 @@ require("lazy").setup({
     lazy = false,
     version = false, -- always use the latest git commit
   },
+  -- Per-user lockfile, outside this repo: every install updates plugins to their latest commit
+  lockfile = vim.fn.stdpath("data") .. "/lazy-lock.json",
   install = { colorscheme = { "catppuccin", "habamax" } },
   checker = { enabled = true, notify = false }, -- check for plugin updates in the background
   performance = {

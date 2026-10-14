@@ -136,8 +136,9 @@ jobs:
           rm -f "$HOME/.local/share/nvim/site/parser/c.so"   # force a parser to compile again
           bash install.sh 2>&1 | tee "$RUNNER_TEMP/install-rerun.log"
           ! grep -q "GLIBC_2.39" "$RUNNER_TEMP/install-rerun.log"
-          # A re-run must not install or upgrade anything that is already there
-          grep -q "Everything is already installed" "$RUNNER_TEMP/install-rerun.log"
+          # A re-run installs nothing new: no system changes, no fresh installs of the user tools
+          ! grep -q "System, for every user" "$RUNNER_TEMP/install-rerun.log"
+          ! grep -E "^ +(Neovim|Node.js \(LTS\)|tree-sitter CLI|uv|Python|nvim plugins) +new" "$RUNNER_TEMP/install-rerun.log"
       - name: verify
         run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
         shell: bash -o pipefail {0}
