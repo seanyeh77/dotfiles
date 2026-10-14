@@ -189,6 +189,8 @@ case "$PM" in
   apk)     OS_REQ=(bash git curl unzip tar gzip xz tmux perl ripgrep:rg build-base neovim:nvim nodejs:node npm)
            OS_OPT=(fd clang-extra-tools:clangd lua-language-server tree-sitter-cli:tree-sitter xclip wget) ;;
 esac
+# Claude Code on musl needs libgcc / libstdc++ (and uses the system ripgrep, already required)
+[ "$PM" = apk ] && [ "$INSTALL_CLAUDE" = 1 ] && OS_REQ+=(libgcc libstdc++)
 BREW_LIST=""
 [ "$PM" = brew ] && has brew && BREW_LIST=" $(brew list --formula -1 2>/dev/null | tr '\n' ' ') "
 pkg_installed() { # pkg_installed PACKAGE
@@ -212,6 +214,13 @@ for s in "${OS_REQ[@]}"; do spec_installed "$s" || MISS_REQ+=("${s%%:*}"); done
 for s in "${OS_OPT[@]}"; do spec_installed "$s" || MISS_OPT+=("${s%%:*}"); done
 NEED_BREW=0; [ "$PM" = brew ] && ! has brew && NEED_BREW=1
 NEED_OS=0; [ ${#MISS_REQ[@]} -gt 0 ] || [ ${#MISS_OPT[@]} -gt 0 ] || [ "$NEED_BREW" = 1 ] && NEED_OS=1
+# Older versions of this installer linked /usr/local/bin/tree-sitter to one user's ~/.cargo,
+# which other users cannot run; that link is removed (a system change, so it is in the plan)
+OLD_TS_LINK=0
+if [ -L /usr/local/bin/tree-sitter ]; then
+  case "$(readlink /usr/local/bin/tree-sitter)" in */.cargo/bin/tree-sitter) OLD_TS_LINK=1 ;; esac
+fi
+NEED_SYS=0; [ "$NEED_OS" = 1 ] || [ "$OLD_TS_LINK" = 1 ] && NEED_SYS=1
 
 # Per-user tools in ~/.local
 nvim_ok() { # Neovim on PATH and >= 0.11
@@ -271,31 +280,60 @@ elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
 fi
 
 # ---------- Plan ----------
-PLAN=()
-plan() { PLAN+=("$(printf '   %-22s %s' "$1" "$2")"); }
+# Two parts: system changes (shared by every user, need sudo / Homebrew) and changes that stay
+# in this user's home. Only items that are not installed yet are listed.
+SYS_PLAN=(); USER_PLAN=()
+sys_plan()  { SYS_PLAN+=("$(printf '     %-22s %s' "$1" "$2")"); }
+user_plan() { USER_PLAN+=("$(printf '     %-22s %s' "$1" "$2")"); }
+case "$PM" in
+  brew)    PM_CMD="brew install" ;;
+  apt-get) PM_CMD="apt-get install" ;;
+  pacman)  PM_CMD="pacman -S" ;;
+  apk)     PM_CMD="apk add" ;;
+  *)       PM_CMD="$PM install" ;;
+esac
 if [ "$NEED_OS" = 1 ]; then
-  how="$PM"; [ "$SUDO_OK" = 2 ] && how="sudo $PM"
-  [ "$SUDO_OK" = 0 ] && how="no sudo: ask an admin"
-  [ "$NEED_BREW" = 1 ] && plan "Homebrew" "brew.sh"
-  [ ${#MISS_REQ[@]} -gt 0 ] && plan "OS packages" "${MISS_REQ[*]} ($how)"
-  [ ${#MISS_OPT[@]} -gt 0 ] && plan "optional OS packages" "${MISS_OPT[*]} ($how)"
+  [ "$NEED_BREW" = 1 ] && sys_plan "Homebrew" "installs into /opt/homebrew (or /usr/local), asks for sudo once"
+  case "$PM" in
+    apt-get) sys_plan "package index" "apt-get update (refresh only, nothing upgraded)" ;;
+    pacman)  sys_plan "package index" "pacman -Sy (refresh only, nothing upgraded)" ;;
+    zypper)  sys_plan "package index" "zypper refresh (refresh only, nothing upgraded)" ;;
+    apk)     sys_plan "package index" "apk update (refresh only, nothing upgraded)" ;;
+  esac
+  [ ${#MISS_REQ[@]} -gt 0 ] && sys_plan "OS packages" "$PM_CMD ${MISS_REQ[*]}"
+  [ ${#MISS_OPT[@]} -gt 0 ] && sys_plan "optional OS packages" "$PM_CMD ${MISS_OPT[*]} (skipped if not available)"
 fi
-[ "$NEED_NVIM" = 1 ]     && plan "Neovim" "latest release in ~/.local/opt/nvim"
-[ "$NEED_NODE" = 1 ]     && plan "Node.js $NODE_MAJOR" "in ~/.local/opt/node"
-[ "$NEED_TS" = 1 ]       && plan "tree-sitter CLI" "in ~/.local/opt/tree-sitter-cli (built with cargo on old glibc)"
-[ "$NEED_UV" = 1 ]       && plan "uv" "in ~/.local/bin"
-[ "$NEED_PY" = 1 ]       && plan "Python $PYTHON_VERSION" "with uv, python3 in ~/.local/bin"
-[ "$NEED_DOTFILES" = 1 ] && plan "dotfiles" "clone to $DOTFILES_DIR"
-[ "$NEED_OMT" = 1 ]      && plan "Oh my tmux!" "clone to $OH_MY_TMUX"
-[ "$NEED_LAZY" = 1 ]     && plan "nvim plugins" "LazyVim, LSP servers, formatters, parsers"
-[ "$NEED_CLAUDE" = 1 ]   && plan "Claude Code" "native installer, in ~/.local/bin"
-[ -n "$MISS_PLUGINS" ]   && plan "Claude plugins" "$MISS_PLUGINS"
+[ "$OLD_TS_LINK" = 1 ] && sys_plan "old link" "rm /usr/local/bin/tree-sitter (points into one user's ~/.cargo)"
+[ "$NEED_NVIM" = 1 ]     && user_plan "Neovim" "latest release in ~/.local/opt/nvim"
+[ "$NEED_NODE" = 1 ]     && user_plan "Node.js $NODE_MAJOR" "in ~/.local/opt/node"
+[ "$NEED_TS" = 1 ]       && user_plan "tree-sitter CLI" "in ~/.local/opt/tree-sitter-cli (built with cargo on old glibc)"
+[ "$NEED_UV" = 1 ]       && user_plan "uv" "in ~/.local/bin"
+[ "$NEED_PY" = 1 ]       && user_plan "Python $PYTHON_VERSION" "with uv, python3 in ~/.local/bin"
+[ "$NEED_DOTFILES" = 1 ] && user_plan "dotfiles" "clone to $DOTFILES_DIR"
+[ "$NEED_OMT" = 1 ]      && user_plan "Oh my tmux!" "clone to $OH_MY_TMUX"
+[ "$NEED_LAZY" = 1 ]     && user_plan "nvim plugins" "LazyVim, LSP servers, formatters, parsers in ~/.local/share/nvim"
+[ "$NEED_CLAUDE" = 1 ]   && user_plan "Claude Code" "native installer, in ~/.local/bin"
+[ -n "$MISS_PLUGINS" ]   && user_plan "Claude plugins" "$MISS_PLUGINS (in ~/.claude)"
 
-if [ ${#PLAN[@]} -eq 0 ]; then
+if [ ${#SYS_PLAN[@]} -eq 0 ] && [ ${#USER_PLAN[@]} -eq 0 ]; then
   log "Everything is already installed; updating the config and adding any missing nvim plugins"
 else
-  log "Not installed yet, will be installed:"
-  printf '%s\n' "${PLAN[@]}"
+  log "Not installed yet:"
+  if [ ${#SYS_PLAN[@]} -gt 0 ]; then
+    case "$SUDO_OK" in
+      0) echo "   System, for every user (no sudo: NOT changed, ask an admin):" ;;
+      1) if [ "$PM" = brew ]; then echo "   System, for every user (Homebrew):"
+         else echo "   System, for every user (as root):"; fi ;;
+      2) echo "   System, for every user (sudo, asks for your password):" ;;
+    esac
+    printf '%s
+' "${SYS_PLAN[@]}"
+  fi
+  if [ ${#USER_PLAN[@]} -gt 0 ]; then
+    echo "   Only you ($(id -un)), in ~, no sudo:"
+    printf '%s
+' "${USER_PLAN[@]}"
+  fi
   echo "   Anything already installed is left as it is."
   if [ "$HAS_TTY" = 1 ] && [ "${ASSUME_YES:-0}" != 1 ]; then
     ask "Install these? [Y/n]" y
@@ -304,13 +342,14 @@ else
 fi
 
 # Everything that gets installed is recorded here and listed at the end
-DONE=(); FAILED=()
-did()    { DONE+=("$*"); }
+DONE=(); SYS_DONE=(); FAILED=()
+did()     { DONE+=("$*"); }
+sys_did() { SYS_DONE+=("$*"); }
 failed() { FAILED+=("$*"); warn "not installed: $*"; }
 
 # ---------- OS packages ----------
-if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 2 ]; then
-  log "sudo is used only for shared OS packages (${MISS_REQ[*]:-} ${MISS_OPT[*]:-})"
+if [ "$NEED_SYS" = 1 ] && [ "$SUDO_OK" = 2 ]; then
+  log "sudo is used only for the system changes listed above"
   if sudo -v; then SUDO_OK=1; else SUDO_OK=0; fi
 fi
 pm_add() { # pm_add PACKAGE...
@@ -330,7 +369,7 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
     log "Installing Homebrew"
     NONINTERACTIVE=1 bash -c "$(fetch https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$b" ] && eval "$("$b" shellenv)"; done
-    did "Homebrew"
+    sys_did "Homebrew"
   fi
   # Refresh the package index (does not upgrade anything)
   case "$PM" in
@@ -341,10 +380,10 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   esac
   if [ ${#MISS_REQ[@]} -gt 0 ]; then
     pm_add "${MISS_REQ[@]}" || die "could not install OS packages: ${MISS_REQ[*]}"
-    did "${MISS_REQ[*]}"
+    sys_did "OS packages: ${MISS_REQ[*]}"
   fi
   for p in ${MISS_OPT[@]+"${MISS_OPT[@]}"}; do
-    if pm_add "$p" >/dev/null 2>&1; then did "$p"; else failed "$p (optional, not available)"; fi
+    if pm_add "$p" >/dev/null 2>&1; then sys_did "OS package: $p"; else failed "$p (optional OS package, not available)"; fi
   done
   hash -r
 elif [ "$NEED_OS" = 1 ]; then
@@ -416,12 +455,8 @@ if [ "$NEED_TS" = 1 ] && has npm; then
   fi
   ts_works "$LOCAL_BIN/tree-sitter" && did "tree-sitter CLI $(tree-sitter --version | awk '{print $2}')" || failed "tree-sitter CLI"
 fi
-# Older versions of this installer linked /usr/local/bin/tree-sitter to one user's ~/.cargo,
-# which other users cannot run. Remove that link when we can.
-if [ "$SUDO_OK" = 1 ] && [ -L /usr/local/bin/tree-sitter ]; then
-  case "$(readlink /usr/local/bin/tree-sitter)" in
-    */.cargo/bin/tree-sitter) sudo rm -f /usr/local/bin/tree-sitter ;;
-  esac
+if [ "$OLD_TS_LINK" = 1 ] && [ "$SUDO_OK" = 1 ]; then
+  sudo rm -f /usr/local/bin/tree-sitter && sys_did "removed old link /usr/local/bin/tree-sitter"
 fi
 if ! has tree-sitter || ! ts_works tree-sitter; then
   warn "tree-sitter CLI missing or broken, syntax highlighting parsers will not compile"
@@ -521,10 +556,7 @@ fi
 # ---------- Claude Code (optional, see the questions at the top) ----------
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   if [ "$PM" = apk ]; then
-    # musl: the native binary needs libgcc / libstdc++ and uses the system ripgrep
-    if [ "$SUDO_OK" = 1 ]; then
-      for p in libgcc libstdc++ ripgrep; do pkg_installed "$p" || { sudo apk add "$p" >/dev/null && did "$p"; }; done
-    fi
+    # musl: libgcc / libstdc++ come with the OS packages above; use the system ripgrep
     mkdir -p "$HOME/.claude"
     if [ ! -f "$HOME/.claude/settings.json" ]; then
       printf '{\n  "env": { "USE_BUILTIN_RIPGREP": "0" }\n}\n' > "$HOME/.claude/settings.json"
@@ -583,9 +615,14 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
 fi
 
 # ---------- Summary ----------
-if [ ${#DONE[@]} -gt 0 ]; then
+if [ ${#SYS_DONE[@]} -gt 0 ] || [ ${#DONE[@]} -gt 0 ]; then
   log "Installed:"
-  printf '   %s\n' "${DONE[@]}"
+  if [ ${#SYS_DONE[@]} -gt 0 ]; then
+    echo "   System, for every user:"; printf '     %s\n' "${SYS_DONE[@]}"
+  fi
+  if [ ${#DONE[@]} -gt 0 ]; then
+    echo "   Only you, in ~:"; printf '     %s\n' "${DONE[@]}"
+  fi
 else
   log "Nothing new was installed"
 fi
