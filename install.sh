@@ -350,12 +350,6 @@ lk_python() {
   timeout_cmd 60 "$(command -v uv)" python list 2>/dev/null \
     | sed -n 's/^cpython-\([0-9]*\.[0-9]*\.[0-9]*\)-.*/\1/p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1
 }
-lk_nvim_plan() {
-  # Output to a file, not a pipe: a git process left behind by a killed nvim cannot hold it open
-  timeout_cmd 120 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').plan()" \
-    > "$LOOKUP/nvim_plan.raw" 2>/dev/null
-  tr -d '\r' < "$LOOKUP/nvim_plan.raw" | grep -E '^(plugin|mason)'$'\t'
-}
 lk_claude() {
   # Same version numbers as the native build
   fetch_quiet https://registry.npmjs.org/@anthropic-ai/claude-code/latest | grep -o '"version":"[^"]*"' | sed -n '1s/.*:"\(.*\)"/\1/p'
@@ -367,9 +361,6 @@ lookup uv "uv" gh_latest astral-sh/uv
 if [ -z "${PYTHON_VERSION:-}" ] && has uv; then lookup python "Python" lk_python; fi
 [ -d "$DOTFILES_DIR/.git" ] && lookup dotfiles "dotfiles" git_update "$DOTFILES_DIR"
 [ -d "$OH_MY_TMUX/.git" ] && lookup omt "Oh my tmux!" git_update "$OH_MY_TMUX"
-if [ -d "$DATA_HOME/nvim/lazy/LazyVim" ] && nvim_ok && [ -d "$HOME/.config/nvim" ]; then
-  lookup nvim_plan "nvim plugins, Mason (up to 2 min)" lk_nvim_plan
-fi
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   lookup claude "Claude Code" lk_claude
   has claude && lookup claude_plugins "Claude plugins" claude plugin list
@@ -439,13 +430,9 @@ if [ -d "$DOTFILES_DIR/.git" ]; then DOTFILES_UPD="$(lookup_result dotfiles)"; e
 NEED_OMT=0; OMT_UPD=""
 if [ -d "$OH_MY_TMUX/.git" ]; then OMT_UPD="$(lookup_result omt)"; else NEED_OMT=1; fi
 
-# nvim plugins (latest commits) and Mason packages (latest versions), from LazyVim itself
-NEED_LAZY=0; NVIM_PLAN=""
-if [ ! -d "$DATA_HOME/nvim/lazy/LazyVim" ]; then
-  NEED_LAZY=1
-else
-  NVIM_PLAN="$(lookup_result nvim_plan)"
-fi
+# nvim plugins and Mason packages are not checked here (that needs a full nvim start and a git
+# fetch of every plugin): they are always updated to the latest, and the summary lists the changes
+NEED_LAZY=0; [ -d "$DATA_HOME/nvim/lazy/LazyVim" ] || NEED_LAZY=1
 
 # Claude Code and the chosen plugins / skills that are not installed yet
 NEED_CLAUDE=0; CLAUDE_CUR=""; CLAUDE_LATEST=""; MISS_PLUGINS=""
@@ -525,16 +512,6 @@ if [ -n "$DOTFILES_UPD" ]; then set -- $DOTFILES_UPD; user_plan "dotfiles" "$1 -
 [ "$NEED_OMT" = 1 ]      && user_plan "Oh my tmux!" "new, latest commit"
 if [ -n "$OMT_UPD" ]; then set -- $OMT_UPD; user_plan "Oh my tmux!" "$1 -> $2 ($3 new commits)"; fi
 [ "$NEED_LAZY" = 1 ]     && user_plan "nvim plugins" "new: LazyVim, LSP servers, formatters, parsers (latest)"
-if [ -n "$NVIM_PLAN" ]; then
-  while IFS=$'\t' read -r kind name from to; do
-    case "$kind" in
-      plugin) user_plan "nvim plugin $name" "$from -> $to" ;;
-      mason)  if [ "$from" = "-" ]; then user_plan "Mason $name" "new $to"; else user_plan "Mason $name" "$from -> $to"; fi ;;
-    esac
-  done <<EOF
-$NVIM_PLAN
-EOF
-fi
 [ "$NEED_CLAUDE" = 1 ]   && user_plan "Claude Code" "$(change "$CLAUDE_CUR" "$CLAUDE_LATEST" "~/.local/bin")"
 for p in $MISS_PLUGINS; do
   if [ "$(plugin_source "$p")" = skill ]; then user_plan "Claude skill $p" "new, latest"
@@ -578,6 +555,7 @@ else
     print_rows "${USER_PLAN[@]}"
   fi
   echo "   Installed OS packages are left as they are; everything else is kept at the latest release."
+  echo "   nvim plugins and LSP servers are updated to the latest too; the summary lists what changed."
   if [ "$HAS_TTY" = 1 ] && [ "${ASSUME_YES:-0}" != 1 ]; then
     ask "Continue? [Y/n]" y
     case "$REPLY" in [Nn]*) log "Nothing changed"; exit 0 ;; esac
@@ -758,10 +736,21 @@ fi
 log "Linking dotfiles"
 if [ "$NEED_DOTFILES" = 0 ]; then
   # safe.directory: allow running as a different user than the repo owner (e.g. root in a container)
-  if git -c safe.directory="$DOTFILES_DIR" -C "$DOTFILES_DIR" pull -q --ff-only 2>/dev/null; then
+  dgit() { git -c safe.directory="$DOTFILES_DIR" -C "$DOTFILES_DIR" "$@"; }
+  # nvim/lazy-lock.json used to live in the repo and was rewritten by every plugin update;
+  # it now lives in ~/.local/share/nvim, so drop local changes to the old copy
+  dgit checkout -q -- nvim/lazy-lock.json 2>/dev/null || true
+  if dgit pull -q --ff-only 2>/dev/null; then
     if [ -n "$DOTFILES_UPD" ]; then set -- $DOTFILES_UPD; did "dotfiles $1 -> $2"; fi
+  elif [ -z "$(dgit status --porcelain --untracked-files=no 2>/dev/null)" ] \
+       && dgit rev-parse -q --verify '@{u}' >/dev/null 2>&1 \
+       && ! dgit cherry '@{u}' HEAD 2>/dev/null | grep -q '^+'; then
+    # Not a fast-forward, but every local commit is already upstream with the same changes
+    # (the upstream history was rewritten) and nothing is modified: move to the upstream
+    old="$(dgit rev-parse --short HEAD)"
+    dgit reset -q --hard '@{u}' && did "dotfiles $old -> $(dgit rev-parse --short HEAD) (upstream history rewritten)"
   else
-    warn "git pull skipped (local changes, detached HEAD or no remote)"
+    warn "dotfiles not updated: $DOTFILES_DIR has local changes or commits (git -C $DOTFILES_DIR status)"
   fi
 else
   git clone -q "$DOTFILES_REPO" "$DOTFILES_DIR"
@@ -806,11 +795,17 @@ done
 # Bound every step so a network problem cannot hang forever (macOS has no timeout: run as is)
 # Lazy sync: install missing plugins and update all of them to the latest commit
 log "Installing and updating nvim plugins (LazyVim)"
-if with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! sync" +qa; then
-  printf '%s\n' "$NVIM_PLAN" | while IFS=$'\t' read -r kind name from to; do
-    if [ "$kind" = plugin ]; then echo "nvim plugin $name $from -> $to"; fi
-  done > "$TMP/plugins.done"
-  while IFS= read -r l; do did "$l"; done < "$TMP/plugins.done"
+# Which plugin commits changed: compare the lockfile before and after the sync
+LAZY_LOCK="$DATA_HOME/nvim/lazy-lock.json"
+lock_commits() { [ -f "$1" ] && sed -n 's/^ *"\([^"]*\)": *{.*"commit": *"\([0-9a-f]\{7\}\).*/\1 \2/p' "$1" | LC_ALL=C sort; }
+lock_commits "$LAZY_LOCK" > "$TMP/lock.before" || true
+if with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! sync" +qa </dev/null; then
+  lock_commits "$LAZY_LOCK" > "$TMP/lock.after" || true
+  if [ -s "$TMP/lock.before" ]; then
+    LC_ALL=C join "$TMP/lock.before" "$TMP/lock.after" | awk '$2 != $3 {print "nvim plugin " $1 " " $2 " -> " $3}' > "$TMP/plugins.done"
+    LC_ALL=C join -v 2 "$TMP/lock.before" "$TMP/lock.after" | awk '{print "nvim plugin " $1 " new " $2}' >> "$TMP/plugins.done"
+    while IFS= read -r l; do did "$l"; done < "$TMP/plugins.done"
+  fi
 else
   failed "nvim plugins (Lazy sync failed or timed out, run :Lazy sync)"
 fi
@@ -821,14 +816,14 @@ log "Installing and updating LSP servers, formatters and treesitter parsers"
 export CFLAGS="${CFLAGS:--O2}"
 # DOTFILES_HEADLESS_INSTALL stops LazyVim's background parser builds; headless.lua builds them
 # itself and waits for every Mason package and parser to finish (see nvim/lua/dotfiles/headless.lua)
-if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install()"; then
+# `cquit 1` runs only if install() itself failed to quit (e.g. a Lua error), so nvim never hangs
+if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install()" \
+     -c "cquit 1" </dev/null | tee "$TMP/headless.log"; then
   [ "$NEED_LAZY" = 1 ] && did "nvim plugins, LSP servers, formatters and parsers (latest)"
-  printf '%s\n' "$NVIM_PLAN" | while IFS=$'\t' read -r kind name from to; do
-    if [ "$kind" = mason ]; then
-      if [ "$from" = "-" ]; then echo "Mason $name $to"; else echo "Mason $name $from -> $to"; fi
-    fi
-  done > "$TMP/mason.done"
-  while IFS= read -r l; do did "$l"; done < "$TMP/mason.done"
+  # "  mason: updating NAME A -> B" / "  mason: installing NAME V" lines from headless.lua
+  sed -n 's/^ *mason: updating \(.*\)/Mason \1/p; s/^ *mason: installing \(.*\)/Mason \1 (new)/p' "$TMP/headless.log" \
+    | tr -d '\r' > "$TMP/mason.done"
+  if [ "$NEED_LAZY" = 0 ]; then while IFS= read -r l; do did "$l"; done < "$TMP/mason.done"; fi
 else
   failed "some LSP servers or parsers (open nvim and check :Mason and :checkhealth)"
 fi

@@ -1,7 +1,6 @@
 -- Headless install and inspection helpers, used by install.sh and ci/verify.lua.
 --
 --   nvim --headless -c "lua require('dotfiles.headless').install()"   install / update everything, then quit
---   nvim --headless -c "lua require('dotfiles.headless').plan()"      list what install() would change
 --
 -- The lists come from LazyVim itself (its core plus the extras in config/lazy.lua), so this file
 -- never repeats which languages are configured.
@@ -132,32 +131,6 @@ local function install_mason(names, timeout_ms)
   end
   table.sort(failed)
   return failed
-end
-
---- Print what an install would change, one tab-separated line each, then quit:
----   plugin  NAME  FROM  TO      (lazy.nvim commits)
----   mason   NAME  FROM|-  TO    (Mason package versions)
-function M.plan()
-  local ok, err = pcall(function()
-    local Config = require("lazy.core.config")
-    require("lazy.manage").check({ wait = true, show = false })
-    local names = vim.tbl_keys(Config.plugins)
-    table.sort(names)
-    for _, name in ipairs(names) do
-      local u = Config.plugins[name]._.updates
-      if u and u.from and u.to and u.from.commit and u.to.commit then
-        out(("plugin\t%s\t%s\t%s"):format(name, u.from.commit:sub(1, 7), u.to.commit:sub(1, 7)))
-      end
-    end
-    local todo = mason_todo(M.collect().mason)
-    for _, t in ipairs(todo) do
-      out(("mason\t%s\t%s\t%s"):format(t.name, t.from or "-", t.to or "latest"))
-    end
-  end)
-  if not ok then
-    out("error\t" .. tostring(err):gsub("[\t\n]", " "))
-  end
-  vim.cmd("qa!")
 end
 
 --- Compile every treesitter parser (two rounds: parallel builds occasionally fail).
