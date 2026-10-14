@@ -462,10 +462,22 @@ for p in $MISS_PLUGINS; do
 done
 # Claude Code settings this installer manages in ~/.claude/settings.json (only keys that are unset)
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
-NEED_CLAUDE_ATTR=0
-if [ "$INSTALL_CLAUDE" = 1 ] && ! grep -qs '"attribution"' "$CLAUDE_SETTINGS"; then
-  NEED_CLAUDE_ATTR=1
-  user_plan "Claude settings" "no Co-Authored-By trailer in commits, no attribution line in PRs"
+NEED_CLAUDE_ATTR=0; NEED_GIT_HOOK=0
+GIT_HOOKS="$DOTFILES_DIR/git/hooks"
+if [ "$INSTALL_CLAUDE" = 1 ]; then
+  if ! grep -qs '"attribution"' "$CLAUDE_SETTINGS" || ! grep -qs '"sessionUrl"' "$CLAUDE_SETTINGS"; then
+    NEED_CLAUDE_ATTR=1
+    user_plan "Claude settings" "no Co-Authored-By / Claude-Session in commits, no attribution in PRs"
+  fi
+  # Second layer: a global commit-msg hook strips those lines from any commit, and runs each
+  # repository's own hooks too. Only when no other global hooks path is set.
+  v="$(git config --global core.hooksPath 2>/dev/null || true)"
+  if [ -z "$v" ]; then
+    NEED_GIT_HOOK=1
+    user_plan "git commit-msg hook" "remove Claude co-author lines from every commit (git config --global core.hooksPath)"
+  elif [ "$v" != "$GIT_HOOKS" ]; then
+    warn "git core.hooksPath is already set to $v; not adding the hook that removes Claude co-author lines"
+  fi
 fi
 
 if [ ${#SYS_PLAN[@]} -eq 0 ] && [ ${#USER_PLAN[@]} -eq 0 ]; then
@@ -756,14 +768,25 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
       const fs = require("fs"), f = process.env.CLAUDE_SETTINGS;
       let s = {};
       if (fs.existsSync(f)) s = JSON.parse(fs.readFileSync(f, "utf8") || "{}");
-      if (s.attribution === undefined) s.attribution = { commit: "", pr: "" };
+      // "" hides the commit trailer / PR line; sessionUrl false drops the Claude-Session link.
+      // Keys the user already set are kept.
+      if (s.attribution === undefined || s.attribution === null) s.attribution = {};
+      if (typeof s.attribution === "object") {
+        if (s.attribution.commit === undefined) s.attribution.commit = "";
+        if (s.attribution.pr === undefined) s.attribution.pr = "";
+        if (s.attribution.sessionUrl === undefined) s.attribution.sessionUrl = false;
+      }
       if (process.env.MUSL === "1") { s.env = s.env || {}; if (s.env.USE_BUILTIN_RIPGREP === undefined) s.env.USE_BUILTIN_RIPGREP = "0"; }
       fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");
     '; then
-      [ "$NEED_CLAUDE_ATTR" = 1 ] && did "Claude settings: no co-author in commits and PRs"
+      [ "$NEED_CLAUDE_ATTR" = 1 ] && did "Claude settings: no co-author or session link in commits and PRs"
     else
       failed "Claude settings (could not update ~/.claude/settings.json; is it valid JSON?)"
     fi
+  fi
+  if [ "$NEED_GIT_HOOK" = 1 ]; then
+    if git config --global core.hooksPath "$GIT_HOOKS"; then did "git commit-msg hook (core.hooksPath $GIT_HOOKS)"
+    else failed "git commit-msg hook"; fi
   fi
   # Native installer: updates itself in the background, so it is only run when claude is missing
   if [ "$NEED_CLAUDE" = 1 ] && [ -n "$CLAUDE_CUR" ]; then
