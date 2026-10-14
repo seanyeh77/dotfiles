@@ -13,11 +13,16 @@ if vim.fn.executable("claude") == 0 then
   return {}
 end
 
+-- Headless runs (install.sh, CI) start no server
+local headless = vim.tbl_contains(vim.v.argv, "--headless")
+
 return {
   "coder/claudecode.nvim",
+  -- Load at startup, not on the first Space a key: the server must be running before Claude
+  -- connects (/ide or claude --ide), otherwise Claude finds no Neovim
+  lazy = headless,
   opts = function(_, opts)
-    -- No server in headless runs (install.sh, CI)
-    opts.auto_start = #vim.api.nvim_list_uis() > 0
+    opts.auto_start = not headless
     if vim.env.TMUX then
       -- Open Claude in a tmux pane next to nvim instead of a terminal inside nvim. tmux starts
       -- the pane, so pass the connection variables (port etc.) to it explicitly.
