@@ -18,6 +18,7 @@ Before changing anything it shows a plan with versions and asks once: system cha
 - **Claude Code**: the installer asks whether to install it and which plugins to add (press Enter for all), and remembers the answers; `DOTFILES_ASK=1` asks again:
   - Workflow: commit-commands, code-review, feature-dev, security-guidance, code-simplifier, claude-md-management, superpowers, context7
   - Frontend: frontend-design, playwright, design, vercel-react-best-practices
+  - At the end the installer lists the MCP servers that still need a sign-in (run `/mcp` in Claude), such as context7
 
 ## Neovim
 

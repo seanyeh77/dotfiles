@@ -963,7 +963,25 @@ if [ ${#FAILED[@]} -gt 0 ]; then
   warn "Not installed:"
   printf '   %s\n' "${FAILED[@]}" >&2
 fi
-[ "$INSTALL_CLAUDE" = 1 ] && has claude && log "Claude Code: run 'claude' (or prefix + A in tmux) and log in on first start"
-log "Done. Open a new shell, then run nvim (and tmux). :checkhealth and :Mason show the details"
+# ---------- Next steps (printed on every run, so nothing is forgotten) ----------
+log "Done. Next steps:"
+echo "   - Open a new shell, then run nvim and tmux (:checkhealth and :Mason show the details)"
+if [ "$INSTALL_CLAUDE" = 1 ] && has claude; then
+  [ "$NEED_CLAUDE" = 1 ] && [ -z "$CLAUDE_CUR" ] && echo "   - Run claude (or tmux prefix + A) and log in"
+  # MCP servers (plugin tools, claude.ai connectors) that still need a sign-in. `claude mcp list`
+  # connects to each one, so it is bounded; run from ~ so no project's .mcp.json is involved.
+  v="$(cd "$HOME" && timeout_cmd 60 claude mcp list 2>/dev/null || true)"
+  v="$(printf '%s\n' "$v" | grep -i 'auth' | sed 's/: .*//' | tr -d '\r' || true)"
+  must="$(printf '%s\n' "$v" | grep -v '^plugin:design:' | grep -v '^$' | tr '\n' ' ' || true)"
+  opt="$(printf '%s\n' "$v" | sed -n 's/^plugin:design://p' | tr '\n' ' ' || true)"
+  if [ -n "$must" ]; then
+    echo "   - In claude, run /mcp and sign in to: $must"
+    case "$must" in *claude.ai*) echo "     (claude.ai ... entries are connectors from your claude.ai account: reconnect or remove them there)" ;; esac
+  fi
+  if [ -n "$opt" ]; then
+    echo "   - Optional, only if you use them with the design plugin: $opt"
+    echo "     (or turn them off: /mcp, pick one, Disable; this is saved per project)"
+  fi
+fi
 exit 0
 }
