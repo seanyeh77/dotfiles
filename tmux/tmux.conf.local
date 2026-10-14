@@ -441,8 +441,9 @@ bind C-a send-prefix
 # Splits keep the current path: | side by side (same as Oh my tmux's _), - top and bottom
 bind | split-window -h -c "#{pane_current_path}"
 
-# prefix + A: open Claude Code in a split next to the current pane
-bind A split-window -h -c "#{pane_current_path}" 'command -v claude >/dev/null && exec claude; echo "claude is not installed (re-run install.sh)"; read -r _'
+# prefix + A: open Claude Code in a split next to the current pane; --ide connects it to the
+# nvim running in the same folder, so Claude sees the open file and selection
+bind A split-window -h -c "#{pane_current_path}" 'command -v claude >/dev/null && exec claude --ide; echo "claude is not installed (re-run install.sh)"; read -r _'
 
 
 # -- tpm -----------------------------------------------------------------------

@@ -32,9 +32,13 @@ The leader key is `Space`. Press it and wait to see every binding.
 | `gd` / `gr` / `K` | Definition / references / docs |
 | `Space cr` / `Space cf` | Rename / format |
 | `Ctrl-/` | Terminal |
+| `Space ac` / `Space as` | Open Claude / send the selection to Claude |
+| `Space aa` / `Space ad` | Accept / reject Claude's diff |
 | `:qa` | Quit |
 
 Supported languages are Python, C/C++, TypeScript, Rust, Go, Bash, Lua, JSON, YAML, TOML, Docker, Markdown and CMake. To add one, run `:LazyExtras`, or add an import line to `nvim/lua/config/lazy.lua`.
+
+With Claude Code installed, Claude sees the file and selection you have open in nvim and shows its edits as diffs there. In a Claude that was already running, type `/ide` and pick Neovim.
 
 For C/C++, clangd needs a `compile_commands.json` in the project root. Generate it with `cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON` or `bear -- make`.
 
@@ -48,4 +52,4 @@ The prefix is `Ctrl-a`.
 | `C-a h/j/k/l` | Move between panes |
 | `C-a +` | Maximize the pane |
 | `C-a c` / `C-a n` | New / next window |
-| `C-a A` | Open Claude Code |
+| `C-a A` | Open Claude Code, connected to the nvim in the same folder |

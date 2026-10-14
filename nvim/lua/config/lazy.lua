@@ -35,6 +35,11 @@ local spec = {
 if vim.fn.executable("go") == 1 then
   table.insert(spec, { import = "lazyvim.plugins.extras.lang.go" })
 end
+-- Claude Code IDE integration (claudecode.nvim): Claude sees the file and selection you are
+-- editing and shows its edits as diffs here. Settings in lua/plugins/claude.lua
+if vim.fn.executable("claude") == 1 then
+  table.insert(spec, { import = "lazyvim.plugins.extras.ai.claudecode" })
+end
 -- This repo's overrides (lua/plugins/*.lua) come last so they see every extra's options
 table.insert(spec, { import = "plugins" })
 
