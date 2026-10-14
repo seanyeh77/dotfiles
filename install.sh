@@ -35,7 +35,6 @@ set -euo pipefail
 
 DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/seanyeh77/dotfiles}"
 DOTFILES_DIR="${DOTFILES_DIR:-$HOME/dotfiles}"
-NODE_MAJOR="${NODE_MAJOR:-22}"
 
 log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
@@ -232,8 +231,28 @@ nvim_ok() { # Neovim on PATH and >= 0.11
 }
 node_ok() { has node && [ "$(node -v | cut -d. -f1 | tr -d v)" -ge 18 ]; }
 ts_works() { local v; v="$("$1" --version 2>&1)" || return 1; case "$v" in *GLIBC*) return 1 ;; esac; return 0; }
-NEED_NVIM=0; [ "$USE_PM_NVIM" = 0 ] && ! nvim_ok && NEED_NVIM=1
-NEED_NODE=0; [ "$USE_PM_NODE" = 0 ] && ! node_ok && NEED_NODE=1
+# This user's own Neovim and Node.js (glibc Linux) are kept at the latest release: installed when
+# missing, updated when a newer one is out. macOS and Alpine use the package manager's builds,
+# which are installed when missing and otherwise left alone.
+latest_url() { # final URL after redirects, empty on failure
+  if has curl; then curl -fsSLI --connect-timeout 20 -o /dev/null -w '%{url_effective}' "$1" 2>/dev/null || true
+  else wget -S --spider --max-redirect=0 "$1" 2>&1 | awk '/^ *Location:/ {print $2}' | tail -1 || true; fi
+}
+NVIM_CUR=""; NVIM_LATEST=""; NEED_NVIM=0
+if [ "$USE_PM_NVIM" = 0 ]; then
+  v="$("$LOCAL_OPT/nvim/bin/nvim" --version 2>/dev/null || true)"; v="${v%%$'\n'*}"; NVIM_CUR="${v#NVIM }"
+  v="$(latest_url https://github.com/neovim/neovim/releases/latest)"; NVIM_LATEST="${v##*/tag/}"
+  case "$NVIM_LATEST" in v[0-9]*) ;; *) NVIM_LATEST="" ;; esac
+  if [ -z "$NVIM_CUR" ] || { [ -n "$NVIM_LATEST" ] && [ "$NVIM_LATEST" != "$NVIM_CUR" ]; }; then NEED_NVIM=1; fi
+fi
+NODE_CUR=""; NODE_LATEST=""; NEED_NODE=0
+if [ "$USE_PM_NODE" = 0 ]; then
+  NODE_CUR="$("$LOCAL_OPT/node/bin/node" -v 2>/dev/null || true)"
+  # Latest LTS: first row of index.tab whose lts column is set (capture first: awk exits early)
+  v="$(fetch_once https://nodejs.org/dist/index.tab 2>/dev/null || true)"
+  NODE_LATEST="$(printf '%s\n' "$v" | awk -F'\t' 'NR > 1 && $10 != "-" && $10 != "" {print $1; exit}')"
+  if [ -z "$NODE_CUR" ] || { [ -n "$NODE_LATEST" ] && [ "$NODE_LATEST" != "$NODE_CUR" ]; }; then NEED_NODE=1; fi
+fi
 NEED_TS=0
 if [ "$PM" != brew ] && [ "$PM" != apk ] && ! ts_works "$LOCAL_BIN/tree-sitter"; then NEED_TS=1; fi
 NEED_UV=0; has uv || NEED_UV=1
@@ -304,8 +323,14 @@ if [ "$NEED_OS" = 1 ]; then
   [ ${#MISS_OPT[@]} -gt 0 ] && sys_plan "optional OS packages" "$PM_CMD ${MISS_OPT[*]} (skipped if not available)"
 fi
 [ "$OLD_TS_LINK" = 1 ] && sys_plan "old link" "rm /usr/local/bin/tree-sitter (points into one user's ~/.cargo)"
-[ "$NEED_NVIM" = 1 ]     && user_plan "Neovim" "latest release in ~/.local/opt/nvim"
-[ "$NEED_NODE" = 1 ]     && user_plan "Node.js $NODE_MAJOR" "in ~/.local/opt/node"
+if [ "$NEED_NVIM" = 1 ]; then
+  if [ -n "$NVIM_CUR" ]; then user_plan "Neovim ${NVIM_LATEST:-latest}" "update from $NVIM_CUR, in ~/.local/opt/nvim"
+  else user_plan "Neovim ${NVIM_LATEST:-latest}" "in ~/.local/opt/nvim"; fi
+fi
+if [ "$NEED_NODE" = 1 ]; then
+  if [ -n "$NODE_CUR" ]; then user_plan "Node.js ${NODE_LATEST:-LTS}" "latest LTS, update from $NODE_CUR, in ~/.local/opt/node"
+  else user_plan "Node.js ${NODE_LATEST:-LTS}" "latest LTS, in ~/.local/opt/node"; fi
+fi
 [ "$NEED_TS" = 1 ]       && user_plan "tree-sitter CLI" "in ~/.local/opt/tree-sitter-cli (built with cargo on old glibc)"
 [ "$NEED_UV" = 1 ]       && user_plan "uv" "in ~/.local/bin"
 [ "$NEED_PY" = 1 ]       && user_plan "Python $PYTHON_VERSION" "with uv, python3 in ~/.local/bin"
@@ -334,7 +359,7 @@ else
     printf '%s
 ' "${USER_PLAN[@]}"
   fi
-  echo "   Anything already installed is left as it is."
+  echo "   Anything else already installed is left as it is."
   if [ "$HAS_TTY" = 1 ] && [ "${ASSUME_YES:-0}" != 1 ]; then
     ask "Install these? [Y/n]" y
     case "$REPLY" in [Nn]*) log "Nothing installed"; exit 0 ;; esac
@@ -403,32 +428,35 @@ trap 'rm -rf "$TMP"' EXIT
 # glibc Linux: official release in ~/.local/opt/nvim (distro versions are often too old; the
 # config needs >= 0.11). macOS and Alpine use the package manager's Neovim.
 if [ "$NEED_NVIM" = 1 ]; then
-  log "Installing Neovim (official release, $NVIM_ARCH) in ~/.local/opt/nvim"
-  fetch "https://github.com/neovim/neovim/releases/latest/download/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
+  log "Installing Neovim ${NVIM_LATEST:-latest} ($NVIM_ARCH) in ~/.local/opt/nvim"
+  if [ -n "$NVIM_LATEST" ]; then u="download/$NVIM_LATEST"; else u="latest/download"; fi
+  fetch "https://github.com/neovim/neovim/releases/$u/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
   rm -rf "$LOCAL_OPT/nvim" && mkdir -p "$LOCAL_OPT/nvim"
   tar -C "$LOCAL_OPT/nvim" --strip-components=1 -xzf "$TMP/nvim.tar.gz"
   ln -sf "$LOCAL_OPT/nvim/bin/nvim" "$LOCAL_BIN/nvim"
   hash -r
   nvim --version >/dev/null 2>&1 || die "nvim failed to run (glibc too old?). Try a newer OS release."
-  v="$(nvim --version)"; did "Neovim ${v%%$'\n'*}"
+  v="$(nvim --version)"; v="${v%%$'\n'*}"
+  if [ -n "$NVIM_CUR" ]; then did "Neovim ${v#NVIM } (was $NVIM_CUR)"; else did "Neovim ${v#NVIM }"; fi
 fi
 hash -r
 has nvim || die "Neovim is not installed"
 nvim_ok || warn "$(nvim --version 2>/dev/null | sed -n 1p) < 0.11, the config needs 0.11+"
 
 # ---------- Node.js (needed by pyright, ts_ls, bashls, prettier, ...) ----------
-if [ "$NEED_NODE" = 1 ]; then
-  log "Installing Node.js $NODE_MAJOR ($NODE_ARCH) in ~/.local/opt/node"
-  BASE="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x"
-  SUMS="$(fetch "$BASE/SHASUMS256.txt")"
-  NODE_TAR="$(printf '%s\n' "$SUMS" | awk -v a="linux-${NODE_ARCH}.tar.xz" '$2 ~ a"$" {print $2; exit}')"
-  [ -n "$NODE_TAR" ] || die "Cannot find Node.js tarball for linux-${NODE_ARCH}"
-  fetch "$BASE/$NODE_TAR" "$TMP/$NODE_TAR"
+if [ "$NEED_NODE" = 1 ] && [ -z "$NODE_LATEST" ]; then
+  failed "Node.js (could not look up the latest LTS on nodejs.org)"
+elif [ "$NEED_NODE" = 1 ]; then
+  log "Installing Node.js $NODE_LATEST ($NODE_ARCH) in ~/.local/opt/node"
+  NODE_TAR="node-$NODE_LATEST-linux-$NODE_ARCH.tar.xz"
+  fetch "https://nodejs.org/dist/$NODE_LATEST/$NODE_TAR" "$TMP/$NODE_TAR"
   rm -rf "$LOCAL_OPT/node" && mkdir -p "$LOCAL_OPT/node"
   tar -C "$LOCAL_OPT/node" --strip-components=1 -xJf "$TMP/$NODE_TAR"
   for b in node npm npx; do ln -sf "$LOCAL_OPT/node/bin/$b" "$LOCAL_BIN/$b"; done
   hash -r
-  node_ok && did "Node.js $(node -v)" || failed "Node.js"
+  if ! node_ok; then failed "Node.js"
+  elif [ -n "$NODE_CUR" ]; then did "Node.js $(node -v) (was $NODE_CUR)"
+  else did "Node.js $(node -v)"; fi
 fi
 node_ok || warn "Node.js >= 18 not found, JS-based LSPs (pyright, ts_ls...) will fail"
 
