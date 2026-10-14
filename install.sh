@@ -61,7 +61,10 @@ fetch_once() { # fetch_once URL [OUTFILE]
   else die "Need curl or wget"; fi
 }
 # For version lookups: never fails, prints nothing when there is no curl / wget yet
-fetch_quiet() { { has curl || has wget; } || return 0; fetch_once "$@" 2>/dev/null || true; }
+fetch_quiet() { # fetch_quiet URL: at most 30 s
+  if has curl; then curl -fsSL --connect-timeout 10 --max-time 30 "$1" 2>/dev/null || true
+  elif has wget; then wget -qO- -T 30 "$1" 2>/dev/null || true; fi
+}
 fetch() { # fetch URL [OUTFILE]
   local i
   for i in 1 2 3 4; do
@@ -231,8 +234,8 @@ spec_installed() { # spec_installed PACKAGE[:COMMAND]
 pkg_version() { # pkg_version PACKAGE: version the package manager would install, empty if unknown
   local v=""
   case "$PM" in
-    brew)    v="$(brew info "$1" 2>/dev/null || true)"; v="${v%%$'\n'*}"
-             v="$(printf '%s' "$v" | sed -n 's/.*stable \([^ ,]*\).*/\1/p')" ;;
+    brew)    # from one `brew info` call for all missing formulae (BREW_INFO, below)
+             v="$(printf '%s\n' "$BREW_INFO" | awk -v p="==> $1: stable" 'index($0, p) == 1 {sub(/,.*/, "", $4); print $4}')" ;;
     apt-get) v="$(apt-cache policy "$1" 2>/dev/null || true)"
              v="$(printf '%s\n' "$v" | awk '/Candidate:/ {print $2}')" ;;
     dnf)     v="$(dnf -q repoquery --latest-limit 1 --qf '%{version}-%{release}\n' "$1" 2>/dev/null || true)"; v="${v##*$'\n'}" ;;
@@ -292,29 +295,105 @@ node_ok() { has node && [ "$(node -v | cut -d. -f1 | tr -d v)" -ge 18 ]; }
 ts_works() { local v; v="$("$1" --version 2>&1)" || return 1; case "$v" in *GLIBC*) return 1 ;; esac; return 0; }
 first_line() { printf '%s' "${1%%$'\n'*}"; }
 gh_latest() { # gh_latest OWNER/REPO: tag of the latest GitHub release, empty on failure
-  local u=""
-  if has curl; then u="$(curl -fsSL --connect-timeout 20 -o /dev/null -w '%{url_effective}' "https://github.com/$1/releases/latest" 2>/dev/null || true)"
-  else u="$(wget -S --spider --max-redirect=0 "https://github.com/$1/releases/latest" 2>&1 || true)"
+  # Only the redirect header is needed (releases/latest -> releases/tag/vX), not the page
+  local u="" url="https://github.com/$1/releases/latest"
+  if has curl; then
+    u="$(curl -fsSI --connect-timeout 10 --max-time 20 -o /dev/null -w '%{redirect_url}' "$url" 2>/dev/null || true)"
+    case "$u" in */tag/*) ;; *) u="$(curl -fsSL --connect-timeout 10 --max-time 30 -o /dev/null -w '%{url_effective}' "$url" 2>/dev/null || true)" ;; esac
+  else u="$(wget -S --spider -T 20 --max-redirect=0 "$url" 2>&1 || true)"
        u="$(printf '%s\n' "$u" | awk '/^ *Location:/ {x = $2} END {print x}')"; fi
   case "$u" in */tag/*) printf '%s' "${u##*/tag/}" ;; esac
 }
 outdated() { # outdated CURRENT LATEST: true when not installed, or a newer version is known
   [ -z "$1" ] || { [ -n "$2" ] && [ "$1" != "$2" ]; }
 }
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+OH_MY_TMUX="$DATA_HOME/oh-my-tmux"
+git_update() { # git_update DIR: "OLD NEW COUNT" when the upstream is ahead, empty otherwise
+  local d="$1" n
+  GIT_TERMINAL_PROMPT=0 timeout_cmd 60 git -c safe.directory="$d" -C "$d" fetch -q 2>/dev/null || return 0
+  n="$(git -c safe.directory="$d" -C "$d" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0)"
+  [ "$n" -gt 0 ] 2>/dev/null || return 0
+  printf '%s %s %s' "$(git -c safe.directory="$d" -C "$d" rev-parse --short HEAD)" \
+    "$(git -c safe.directory="$d" -C "$d" rev-parse --short '@{u}')" "$n"
+}
+timeout_cmd() { local s="$1"; shift; if has timeout; then timeout "$s" "$@"; else "$@"; fi; }
+
+# The network lookups run in parallel in the background; each writes its answer to a file and
+# is reported as it finishes, so a slow one does not hold up the others.
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+LOOKUP="$TMP/lookup"; mkdir -p "$LOOKUP"
+L_PIDS=(); L_NAMES=(); L_LABELS=()
+lookup() { # lookup NAME LABEL FUNCTION...
+  local name="$1" label="$2"; shift 2
+  ( "$@" > "$LOOKUP/$name" 2>/dev/null || true ) &
+  L_PIDS+=("$!"); L_NAMES+=("$name"); L_LABELS+=("$label")
+}
+lookup_result() { cat "$LOOKUP/$1" 2>/dev/null || true; }
+lk_node() {
+  # Latest LTS: first row of index.tab whose lts column is set
+  fetch_quiet https://nodejs.org/dist/index.tab | awk -F'\t' 'NR > 1 && $10 != "-" && $10 != "" && !x {x = $1} END {print x}'
+}
+lk_python() {
+  # Newest stable CPython uv can download (skips alpha/beta/rc and free-threaded builds)
+  timeout_cmd 60 "$(command -v uv)" python list 2>/dev/null \
+    | sed -n 's/^cpython-\([0-9]*\.[0-9]*\.[0-9]*\)-.*/\1/p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1
+}
+lk_nvim_plan() {
+  timeout_cmd 120 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').plan()" 2>/dev/null \
+    | tr -d '\r' | grep -E '^(plugin|mason)'$'\t'
+}
+lk_claude() {
+  # Same version numbers as the native build
+  fetch_quiet https://registry.npmjs.org/@anthropic-ai/claude-code/latest | grep -o '"version":"[^"]*"' | sed -n '1s/.*:"\(.*\)"/\1/p'
+}
+[ "$USE_PM_NVIM" = 0 ] && lookup nvim "Neovim" gh_latest neovim/neovim
+[ "$USE_PM_NODE" = 0 ] && lookup node "Node.js LTS" lk_node
+if [ "$PM" != brew ] && [ "$PM" != apk ]; then lookup ts "tree-sitter CLI" gh_latest tree-sitter/tree-sitter; fi
+lookup uv "uv" gh_latest astral-sh/uv
+if [ -z "${PYTHON_VERSION:-}" ] && has uv; then lookup python "Python" lk_python; fi
+[ -d "$DOTFILES_DIR/.git" ] && lookup dotfiles "dotfiles" git_update "$DOTFILES_DIR"
+[ -d "$OH_MY_TMUX/.git" ] && lookup omt "Oh my tmux!" git_update "$OH_MY_TMUX"
+if [ -d "$DATA_HOME/nvim/lazy/LazyVim" ] && nvim_ok && [ -d "$HOME/.config/nvim" ]; then
+  lookup nvim_plan "nvim plugins, Mason" lk_nvim_plan
+fi
+if [ "$INSTALL_CLAUDE" = 1 ]; then
+  lookup claude "Claude Code" lk_claude
+  has claude && lookup claude_plugins "Claude plugins" claude plugin list
+fi
+# Wait for all of them, printing each one as it finishes (at most ~2 minutes: every lookup is bounded)
+lookup_wait() {
+  local i n=${#L_PIDS[@]} left start=$SECONDS shown=""
+  [ "$n" -gt 0 ] || return 0
+  echo "   looking up: ${L_LABELS[*]}"
+  while :; do
+    left=0
+    for i in "${!L_PIDS[@]}"; do
+      case " $shown " in *" $i "*) continue ;; esac
+      if kill -0 "${L_PIDS[$i]}" 2>/dev/null; then left=$((left + 1)); continue; fi
+      shown="$shown $i"
+      printf '   %-20s done (%ss)\n' "${L_LABELS[$i]}" "$((SECONDS - start))"
+    done
+    [ "$left" -eq 0 ] && break
+    sleep 1
+  done
+  wait 2>/dev/null || true
+}
+lookup_wait
+
 # Neovim / Node.js: own copies on glibc Linux; macOS and Alpine use the package manager's builds
 NVIM_CUR=""; NVIM_LATEST=""; NEED_NVIM=0
 if [ "$USE_PM_NVIM" = 0 ]; then
   NVIM_CUR="$(first_line "$("$LOCAL_OPT/nvim/bin/nvim" --version 2>/dev/null || true)")"; NVIM_CUR="${NVIM_CUR#NVIM }"
-  NVIM_LATEST="$(gh_latest neovim/neovim)"
+  NVIM_LATEST="$(lookup_result nvim)"
   case "$NVIM_LATEST" in v[0-9]*) ;; *) NVIM_LATEST="" ;; esac
   outdated "$NVIM_CUR" "$NVIM_LATEST" && NEED_NVIM=1
 fi
 NODE_CUR=""; NODE_LATEST=""; NEED_NODE=0
 if [ "$USE_PM_NODE" = 0 ]; then
   NODE_CUR="$("$LOCAL_OPT/node/bin/node" -v 2>/dev/null || true)"
-  # Latest LTS: first row of index.tab whose lts column is set (capture first: awk exits early)
-  v="$(fetch_quiet https://nodejs.org/dist/index.tab)"
-  NODE_LATEST="$(printf '%s\n' "$v" | awk -F'\t' 'NR > 1 && $10 != "-" && $10 != "" && !x {x = $1} END {print x}')"
+  NODE_LATEST="$(lookup_result node)"
   outdated "$NODE_CUR" "$NODE_LATEST" && NEED_NODE=1
 fi
 # tree-sitter CLI (brew / apk: package manager)
@@ -323,21 +402,19 @@ if [ "$PM" != brew ] && [ "$PM" != apk ]; then
   if ts_works "$LOCAL_BIN/tree-sitter"; then
     TS_CUR="$("$LOCAL_BIN/tree-sitter" --version 2>/dev/null || true)"; TS_CUR="$(printf '%s' "$TS_CUR" | awk '{print "v" $2}')"
   fi
-  TS_LATEST="$(gh_latest tree-sitter/tree-sitter)"
+  TS_LATEST="$(lookup_result ts)"
   outdated "$TS_CUR" "$TS_LATEST" && NEED_TS=1
 fi
 # uv and Python, both in ~/.local/bin. PYTHON_VERSION=3.13 pins a version; default is the latest.
 UV_CUR=""; [ -x "$LOCAL_BIN/uv" ] && UV_CUR="$("$LOCAL_BIN/uv" --version 2>/dev/null | awk '{print $2}' || true)"
-UV_LATEST="$(gh_latest astral-sh/uv)"
+UV_LATEST="$(lookup_result uv)"
 NEED_UV=0; outdated "$UV_CUR" "$UV_LATEST" && NEED_UV=1
 PY_CUR=""; [ -x "$LOCAL_BIN/python3" ] && PY_CUR="$("$LOCAL_BIN/python3" --version 2>/dev/null | awk '{print $2}' || true)"
 PY_LATEST=""
 if [ -n "${PYTHON_VERSION:-}" ]; then
   PY_LATEST="$PYTHON_VERSION"
-elif [ -x "$LOCAL_BIN/uv" ] || has uv; then
-  # Newest stable CPython uv can download (skips alpha/beta/rc and free-threaded builds)
-  v="$("$(command -v uv)" python list 2>/dev/null || true)"
-  PY_LATEST="$(printf '%s\n' "$v" | sed -n 's/^cpython-\([0-9]*\.[0-9]*\.[0-9]*\)-.*/\1/p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
+else
+  PY_LATEST="$(lookup_result python)"
 fi
 NEED_PY=0
 if [ -z "$PY_CUR" ]; then NEED_PY=1
@@ -345,39 +422,26 @@ elif [ -n "${PYTHON_VERSION:-}" ]; then case "$PY_CUR" in "$PYTHON_VERSION"|"$PY
 elif outdated "$PY_CUR" "$PY_LATEST"; then NEED_PY=1; fi
 
 # Configuration repos (git): cloned when missing, fast-forwarded when the remote has new commits
-DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-OH_MY_TMUX="$DATA_HOME/oh-my-tmux"
-git_update() { # git_update DIR: "OLD NEW COUNT" when the upstream is ahead, empty otherwise
-  local d="$1" n
-  git -c safe.directory="$d" -C "$d" fetch -q 2>/dev/null || return 0
-  n="$(git -c safe.directory="$d" -C "$d" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0)"
-  [ "$n" -gt 0 ] 2>/dev/null || return 0
-  printf '%s %s %s' "$(git -c safe.directory="$d" -C "$d" rev-parse --short HEAD)" \
-    "$(git -c safe.directory="$d" -C "$d" rev-parse --short '@{u}')" "$n"
-}
 NEED_DOTFILES=0; DOTFILES_UPD=""
-if [ -d "$DOTFILES_DIR/.git" ]; then DOTFILES_UPD="$(git_update "$DOTFILES_DIR")"; else NEED_DOTFILES=1; fi
+if [ -d "$DOTFILES_DIR/.git" ]; then DOTFILES_UPD="$(lookup_result dotfiles)"; else NEED_DOTFILES=1; fi
 NEED_OMT=0; OMT_UPD=""
-if [ -d "$OH_MY_TMUX/.git" ]; then OMT_UPD="$(git_update "$OH_MY_TMUX")"; else NEED_OMT=1; fi
+if [ -d "$OH_MY_TMUX/.git" ]; then OMT_UPD="$(lookup_result omt)"; else NEED_OMT=1; fi
 
 # nvim plugins (latest commits) and Mason packages (latest versions), from LazyVim itself
 NEED_LAZY=0; NVIM_PLAN=""
 if [ ! -d "$DATA_HOME/nvim/lazy/LazyVim" ]; then
   NEED_LAZY=1
-elif nvim_ok && [ -d "$HOME/.config/nvim" ]; then
-  NVIM_PLAN="$(with_timeout 300 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').plan()" 2>/dev/null || true)"
-  NVIM_PLAN="$(printf '%s\n' "$NVIM_PLAN" | tr -d '\r' | grep -E '^(plugin|mason)'$'\t' || true)"
+else
+  NVIM_PLAN="$(lookup_result nvim_plan)"
 fi
 
 # Claude Code and the chosen plugins / skills that are not installed yet
 NEED_CLAUDE=0; CLAUDE_CUR=""; CLAUDE_LATEST=""; MISS_PLUGINS=""
 INSTALLED_PLUGINS=""
 if [ "$INSTALL_CLAUDE" = 1 ]; then
-  # Same version numbers as the native build
-  v="$(fetch_quiet https://registry.npmjs.org/@anthropic-ai/claude-code/latest)"
-  CLAUDE_LATEST="$(printf '%s' "$v" | grep -o '"version":"[^"]*"' | sed -n '1s/.*:"\(.*\)"/\1/p' || true)"
+  CLAUDE_LATEST="$(lookup_result claude)"
   if has claude; then
-    INSTALLED_PLUGINS="$(claude plugin list 2>/dev/null || true)"
+    INSTALLED_PLUGINS="$(lookup_result claude_plugins)"
     CLAUDE_CUR="$(claude --version 2>/dev/null | awk '{print $1}' || true)"
     outdated "$CLAUDE_CUR" "$CLAUDE_LATEST" && NEED_CLAUDE=1
   else
@@ -421,6 +485,10 @@ case "$PM" in
   apk)     PM_CMD="apk add" ;;
   *)       PM_CMD="$PM install" ;;
 esac
+BREW_INFO=""
+if [ "$PM" = brew ] && has brew && [ $((${#MISS_REQ[@]} + ${#MISS_OPT[@]})) -gt 0 ]; then
+  BREW_INFO="$(brew info ${MISS_REQ[@]+"${MISS_REQ[@]}"} ${MISS_OPT[@]+"${MISS_OPT[@]}"} 2>/dev/null || true)"
+fi
 if [ "$NEED_OS" = 1 ]; then
   [ "$NEED_BREW" = 1 ] && sys_plan "Homebrew" "new, in /opt/homebrew (or /usr/local), asks for sudo once"
   if [ "$INDEX_FRESH" = 0 ]; then
@@ -562,9 +630,6 @@ fi
 # Debian/Ubuntu ship fd as fdfind
 if ! has fd && has fdfind; then ln -sf "$(command -v fdfind)" "$LOCAL_BIN/fd"; fi
 
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
-
 # ---------- Neovim ----------
 # glibc Linux: official release in ~/.local/opt/nvim (distro versions are often too old; the
 # config needs >= 0.11). macOS and Alpine use the package manager's Neovim.
@@ -587,8 +652,7 @@ nvim_ok || warn "$(nvim --version 2>/dev/null | sed -n 1p) < 0.11, the config ne
 # ---------- Node.js (needed by pyright, ts_ls, bashls, prettier, ...) ----------
 # curl / wget may have been installed just now: look the version up again if needed
 if [ "$NEED_NODE" = 1 ] && [ -z "$NODE_LATEST" ]; then
-  v="$(fetch_quiet https://nodejs.org/dist/index.tab)"
-  NODE_LATEST="$(printf '%s\n' "$v" | awk -F'\t' 'NR > 1 && $10 != "-" && $10 != "" && !x {x = $1} END {print x}')"
+  NODE_LATEST="$(lk_node || true)"
 fi
 if [ "$NEED_NODE" = 1 ] && [ -z "$NODE_LATEST" ]; then
   failed "Node.js (could not look up the latest LTS on nodejs.org)"
