@@ -198,14 +198,22 @@ fi
 #     to the latest release when a newer one is out
 #
 # Who can change the system: root, Homebrew, or a user with sudo (asked only when needed).
-# NO_SUDO=1 skips sudo.
+# NO_SUDO=1 skips sudo; USE_SUDO=1 asks for the sudo password even when this user is not in
+# the wheel / sudo / admin group.
 SUDO_OK=0
 if [ "$(id -u)" -eq 0 ]; then
   sudo() { "$@"; }; SUDO_OK=1
 elif [ "$PM" = brew ]; then
   SUDO_OK=1 # Homebrew does not use sudo
 elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
-  SUDO_OK=2 # ask for the password after the plan, only if there are system changes
+  if sudo -n true 2>/dev/null; then
+    SUDO_OK=1 # sudo without a password (NOPASSWD, or a cached sudo)
+  elif [ "${USE_SUDO:-0}" = 1 ] || id -nG 2>/dev/null | tr ' ' '\n' | grep -qx -e wheel -e sudo -e admin; then
+    SUDO_OK=2 # ask for the password after the plan, only if there are system changes
+  fi
+  # Otherwise sudo is installed but this user is not an admin (a shared server or cluster):
+  # do not ask for a password that cannot work. USE_SUDO=1 asks anyway.
+
 fi
 # Bound slow steps so a network problem cannot hang forever (macOS has no timeout: run as is)
 # macOS has no `timeout`: use gtimeout (coreutils) or perl's alarm, which kills the command when
@@ -268,10 +276,14 @@ pkg_version() { # pkg_version PACKAGE: version the package manager would install
              v="$(printf '%s\n' "$BREW_INFO" | awk -v p="==> $1: stable" 'index($0, p) == 1 {sub(/,.*/, "", $4); print $4}')" ;;
     apt-get) v="$(apt-cache policy "$1" 2>/dev/null || true)"
              v="$(printf '%s\n' "$v" | awk '/Candidate:/ {print $2}')" ;;
-    dnf)     v="$(dnf -q repoquery --latest-limit 1 --qf '%{version}-%{release}\n' "$1" 2>/dev/null || true)"; v="${v##*$'\n'}" ;;
-    yum)     v="$(yum -q list available "$1" 2>/dev/null || true)"; v="$(printf '%s\n' "$v" | awk 'NF >= 2 {x = $2} END {print x}')" ;;
+    # --assumeno and no stdin: a question (e.g. importing a repository key) is answered "no"
+    # instead of ending up in the output; keep only lines that look like a version
+    dnf)     v="$(dnf -q --assumeno repoquery --latest-limit 1 --qf '%{version}-%{release}\n' "$1" </dev/null 2>/dev/null || true)"
+             v="$(printf '%s\n' "$v" | grep -E '^[0-9][^ ]*$' | tail -1 || true)" ;;
+    yum)     v="$(yum -q --assumeno list available "$1" </dev/null 2>/dev/null || true)"
+             v="$(printf '%s\n' "$v" | awk 'NF >= 2 && $2 ~ /^[0-9]/ {x = $2} END {print x}')" ;;
     pacman)  v="$(pacman -Si "$1" 2>/dev/null || true)"; v="$(printf '%s\n' "$v" | awk -F': *' '/^Version/ {print $2}')" ;;
-    zypper)  v="$(zypper -q info "$1" 2>/dev/null || true)"; v="$(printf '%s\n' "$v" | awk -F': *' '/^Version/ {print $2}')" ;;
+    zypper)  v="$(zypper -q --non-interactive info "$1" </dev/null 2>/dev/null || true)"; v="$(printf '%s\n' "$v" | awk -F': *' '/^Version/ {print $2}')" ;;
     apk)     v="$(apk search -x "$1" 2>/dev/null || true)"; v="${v%%$'\n'*}"; v="${v#"$1"-}" ;;
   esac
   [ "$v" = "(none)" ] && v=""
@@ -568,7 +580,8 @@ else
     case "$SUDO_OK" in
       0) echo "   System, for every user (no sudo: NOT changed, ask an admin):" ;;
       1) if [ "$PM" = brew ]; then echo "   System, for every user (Homebrew):"
-         else echo "   System, for every user (as root):"; fi ;;
+         elif [ "$(id -u)" -eq 0 ]; then echo "   System, for every user (as root):"
+         else echo "   System, for every user (sudo):"; fi ;;
       2) echo "   System, for every user (sudo, asks for your password):" ;;
     esac
     print_rows "${SYS_PLAN[@]}"
