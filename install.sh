@@ -894,6 +894,12 @@ if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua req
   if [ "$NEED_LAZY" = 0 ]; then while IFS= read -r l; do did "$l"; done < "$TMP/mason.done"; fi
 else
   failed "some LSP servers or parsers (open nvim and check :Mason and :checkhealth)"
+  # Mason's own log has the full reason for each failure
+  MASON_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/nvim/mason.log"
+  if [ -f "$MASON_LOG" ]; then
+    warn "last Mason errors ($MASON_LOG):"
+    grep -i 'error\|fail' "$MASON_LOG" | tail -n 5 | cut -c1-300 >&2 || true
+  fi
 fi
 
 # ---------- Claude Code (optional, see the questions at the top) ----------

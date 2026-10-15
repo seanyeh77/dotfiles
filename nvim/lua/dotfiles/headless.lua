@@ -109,10 +109,14 @@ local function install_mason(names, timeout_ms)
       pkg:once("install:success", function()
         pending[t.name] = nil
       end)
-      pkg:once("install:failed", function()
+      pkg:once("install:failed", function(err)
         if pending[t.name] then
           pending[t.name] = nil
           table.insert(failed, t.name)
+          -- Show why (one line), so a common cause (no network, disk quota, missing unzip...)
+          -- is visible without digging through mason.log
+          local msg = tostring(err):gsub("%s+", " ")
+          out(("  mason: failed %s: %s"):format(t.name, msg:sub(1, 200)))
         end
       end)
       if t.from then
