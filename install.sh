@@ -656,7 +656,10 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
     esac
   fi
   if [ ${#MISS_REQ[@]} -gt 0 ]; then
-    pm_add "${MISS_REQ[@]}" || die "could not install OS packages: ${MISS_REQ[*]}"
+    if ! pm_add "${MISS_REQ[@]}"; then
+      [ "$IS_TERMUX" = 1 ] && warn "Termux could not download packages: run termux-change-repo, pick another mirror, then run this again"
+      die "could not install OS packages: ${MISS_REQ[*]}"
+    fi
     for p in "${MISS_REQ[@]}"; do sys_did "$p $(pkg_installed_version "$p")"; done
   fi
   for p in ${MISS_OPT[@]+"${MISS_OPT[@]}"}; do
