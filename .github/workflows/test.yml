@@ -209,9 +209,21 @@ jobs:
         timeout-minutes: 40
         shell: bash -o pipefail {0}
         run: |
+          # install, then check inside the same container (it is removed afterwards)
+          { echo "cat > ~/install.sh <<'INSTALL_EOF'"; cat install.sh; echo INSTALL_EOF
+            echo 'bash ~/install.sh </dev/null'; cat <<'EOF'
+          echo "CHECK id=$(id -u) termux=${TERMUX_VERSION:-none} prefix=${PREFIX:-none}"
+          echo "CHECK nvim=$(command -v nvim) $(nvim --version 2>/dev/null | head -1)"
+          echo "CHECK lazy=$(ls ~/.local/share/nvim/lazy 2>/dev/null | wc -l) plugins"
+          echo "CHECK lazyvim=$(nvim --headless '+lua io.stdout:write(tostring(_G.LazyVim ~= nil))' +qa 2>/dev/null)"
+          echo "CHECK parsers=$(ls ~/.local/share/nvim/site/parser 2>/dev/null | wc -l)"
+          EOF
+          } > "$RUNNER_TEMP/run.sh"
           docker run --rm -i -e INSTALL_CLAUDE=0 \
             -e DOTFILES_REPO="https://github.com/${{ github.repository }}" \
-            termux/termux-docker:x86_64 bash -s < install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
+            termux/termux-docker:x86_64 bash -s < "$RUNNER_TEMP/run.sh" 2>&1 | tee "$RUNNER_TEMP/install.log"
+          grep '^CHECK' "$RUNNER_TEMP/install.log" | while read -r l; do echo "::notice title=termux::$l"; done
+          grep -q '^CHECK lazyvim=true' "$RUNNER_TEMP/install.log"
       - name: report failure
         if: failure() || cancelled()
         run: bash ci/annotate.sh "$RUNNER_TEMP"
