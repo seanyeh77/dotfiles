@@ -196,6 +196,27 @@ jobs:
         run: bash ci/annotate.sh "$RUNNER_TEMP"
         shell: bash
 
+  # Termux (Android) in the termux-docker image: packages are the user's own, no glibc.
+  # Experimental: Mason's prebuilt binaries do not run on Android, so only the install itself
+  # and LazyVim starting are checked.
+  termux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - name: install.sh in Termux
+        timeout-minutes: 40
+        shell: bash -o pipefail {0}
+        run: |
+          docker run --rm -i -e INSTALL_CLAUDE=0 \
+            -e DOTFILES_REPO="https://github.com/${{ github.repository }}" \
+            termux/termux-docker:x86_64 bash -s < install.sh 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: report failure
+        if: failure() || cancelled()
+        run: bash ci/annotate.sh "$RUNNER_TEMP"
+        shell: bash
+
   # Test the exact command users run (main only, since the short URL serves main)
   one-liner:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

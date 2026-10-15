@@ -98,12 +98,19 @@ case "$OS" in
   *) die "Unsupported OS: $OS" ;;
 esac
 grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=1 || IS_WSL=0
-log "OS: $OS ($PM)  Arch: $ARCH  WSL: $IS_WSL"
+# Termux (Android): apt-based, but its packages are the user's own (no root, no sudo), and
+# Android has no glibc, so prebuilt Linux binaries do not run there
+IS_TERMUX=0
+if [ -n "${TERMUX_VERSION:-}" ]; then IS_TERMUX=1; else case "${PREFIX:-}" in *com.termux*) IS_TERMUX=1 ;; esac; fi
+if [ "$IS_TERMUX" = 1 ]; then log "OS: Android, Termux ($PM)  Arch: $ARCH"
+else log "OS: $OS ($PM)  Arch: $ARCH  WSL: $IS_WSL"; fi
 
-# The official nvim / node builds need glibc: use the package manager on macOS and musl (Alpine)
-USE_PM_NVIM=0; USE_PM_NODE=0
-[ "$PM" = brew ] && { USE_PM_NVIM=1; USE_PM_NODE=1; }
-[ "$PM" = apk ]  && { USE_PM_NVIM=1; USE_PM_NODE=1; }
+# The official nvim / node / tree-sitter / uv / Python builds need glibc: use the package
+# manager's on macOS, musl (Alpine) and Termux
+USE_PM_NVIM=0; USE_PM_NODE=0; USE_PM_TOOLS=0
+[ "$PM" = brew ] && { USE_PM_NVIM=1; USE_PM_NODE=1; USE_PM_TOOLS=1; }
+[ "$PM" = apk ]  && { USE_PM_NVIM=1; USE_PM_NODE=1; USE_PM_TOOLS=1; }
+[ "$IS_TERMUX" = 1 ] && { USE_PM_NVIM=1; USE_PM_NODE=1; USE_PM_TOOLS=1; }
 
 # ---------- Questions (asked up front so the rest runs unattended) ----------
 # INSTALL_CLAUDE=1/0 and CLAUDE_PLUGINS="a b" preset the answers; with no terminal
@@ -201,8 +208,8 @@ fi
 # NO_SUDO=1 skips sudo; USE_SUDO=1 asks for the sudo password even when this user is not in
 # the wheel / sudo / admin group.
 SUDO_OK=0
-if [ "$(id -u)" -eq 0 ]; then
-  sudo() { "$@"; }; SUDO_OK=1
+if [ "$(id -u)" -eq 0 ] || [ "$IS_TERMUX" = 1 ]; then
+  sudo() { "$@"; }; SUDO_OK=1 # root, or Termux where packages belong to the user
 elif [ "$PM" = brew ]; then
   SUDO_OK=1 # Homebrew does not use sudo
 elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
@@ -239,7 +246,14 @@ case "$PM" in
   brew)    OS_REQ=(git tmux ripgrep:rg fd neovim:nvim node)
            OS_OPT=(tree-sitter-cli:tree-sitter) ;;
   apt-get) OS_REQ=(git curl unzip tar gzip xz-utils:xz tmux ripgrep:rg build-essential)
-           OS_OPT=(fd-find:fdfind clangd xclip perl wget) ;;
+           if [ "$IS_TERMUX" = 1 ]; then
+             # Termux: Neovim, Node.js, tree-sitter, uv and Python come from its packages too
+             OS_REQ=(git curl unzip tar gzip xz-utils:xz tmux ripgrep:rg build-essential perl
+                     neovim:nvim nodejs-lts:node tree-sitter python:python3 uv)
+             OS_OPT=(fd lua-language-server wget)
+           else
+             OS_OPT=(fd-find:fdfind clangd xclip perl wget)
+           fi ;;
   dnf|yum) OS_REQ=(git curl unzip tar gzip xz tmux gcc gcc-c++:g++ make)
            OS_OPT=(ripgrep:rg fd-find:fd clang-tools-extra:clangd xclip perl wget) ;;
   pacman)  OS_REQ=(git curl unzip tar gzip xz tmux ripgrep:rg base-devel)
@@ -388,9 +402,11 @@ lk_claude() {
 }
 [ "$USE_PM_NVIM" = 0 ] && lookup nvim "Neovim" gh_latest neovim/neovim
 [ "$USE_PM_NODE" = 0 ] && lookup node "Node.js LTS" lk_node
-if [ "$PM" != brew ] && [ "$PM" != apk ]; then lookup ts "tree-sitter CLI" gh_latest tree-sitter/tree-sitter; fi
-lookup uv "uv" gh_latest astral-sh/uv
-if [ -z "${PYTHON_VERSION:-}" ] && has uv; then lookup python "Python" lk_python; fi
+if [ "$USE_PM_TOOLS" = 0 ]; then
+  lookup ts "tree-sitter CLI" gh_latest tree-sitter/tree-sitter
+  lookup uv "uv" gh_latest astral-sh/uv
+  if [ -z "${PYTHON_VERSION:-}" ] && has uv; then lookup python "Python" lk_python; fi
+fi
 [ -d "$DOTFILES_DIR/.git" ] && lookup dotfiles "dotfiles" git_update "$DOTFILES_DIR"
 [ -d "$OH_MY_TMUX/.git" ] && lookup omt "Oh my tmux!" git_update "$OH_MY_TMUX"
 if [ "$INSTALL_CLAUDE" = 1 ]; then
@@ -436,7 +452,7 @@ if [ "$USE_PM_NODE" = 0 ]; then
 fi
 # tree-sitter CLI (brew / apk: package manager)
 TS_CUR=""; TS_LATEST=""; NEED_TS=0
-if [ "$PM" != brew ] && [ "$PM" != apk ]; then
+if [ "$USE_PM_TOOLS" = 0 ]; then
   if ts_works "$LOCAL_BIN/tree-sitter"; then
     TS_CUR="$("$LOCAL_BIN/tree-sitter" --version 2>/dev/null || true)"; TS_CUR="$(printf '%s' "$TS_CUR" | awk '{print "v" $2}')"
   fi
@@ -447,6 +463,7 @@ fi
 UV_CUR=""; [ -x "$LOCAL_BIN/uv" ] && UV_CUR="$("$LOCAL_BIN/uv" --version 2>/dev/null | awk '{print $2}' || true)"
 UV_LATEST="$(lookup_result uv)"
 NEED_UV=0; outdated "$UV_CUR" "$UV_LATEST" && NEED_UV=1
+[ "$IS_TERMUX" = 1 ] && NEED_UV=0 # from Termux's packages
 PY_CUR=""; [ -x "$LOCAL_BIN/python3" ] && PY_CUR="$("$LOCAL_BIN/python3" --version 2>/dev/null | awk '{print $2}' || true)"
 PY_LATEST=""
 if [ -n "${PYTHON_VERSION:-}" ]; then
@@ -458,6 +475,7 @@ NEED_PY=0
 if [ -z "$PY_CUR" ]; then NEED_PY=1
 elif [ -n "${PYTHON_VERSION:-}" ]; then case "$PY_CUR" in "$PYTHON_VERSION"|"$PYTHON_VERSION".*) ;; *) NEED_PY=1 ;; esac
 elif outdated "$PY_CUR" "$PY_LATEST"; then NEED_PY=1; fi
+[ "$IS_TERMUX" = 1 ] && NEED_PY=0 # from Termux's packages (uv cannot download Python for Android)
 
 # Configuration repos (git): cloned when missing, fast-forwarded when the remote has new commits
 NEED_DOTFILES=0; DOTFILES_UPD=""
