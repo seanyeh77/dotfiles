@@ -266,7 +266,8 @@ esac
 # Claude Code on musl needs libgcc / libstdc++ (and uses the system ripgrep, already required)
 [ "$PM" = apk ] && [ "$INSTALL_CLAUDE" = 1 ] && OS_REQ+=(libgcc libstdc++)
 BREW_LIST=""
-[ "$PM" = brew ] && has brew && BREW_LIST=" $(brew list --formula -1 2>/dev/null | tr '\n' ' ') "
+# `brew list` fails when no formula is installed yet (a fresh Homebrew): that just means none
+if [ "$PM" = brew ] && has brew; then BREW_LIST=" $(brew list --formula -1 2>/dev/null | tr '\n' ' ' || true) "; fi
 pkg_installed() { # pkg_installed PACKAGE
   local s
   case "$PM" in
@@ -864,7 +865,7 @@ log "Installing and updating nvim plugins (LazyVim, up to a minute)"
 if with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! sync" +qa </dev/null > "$TMP/lazy.log" 2>&1; then
   lock_commits "$LAZY_LOCK" > "$TMP/lock.after" || true
   n="$(wc -l < "$TMP/lock.after" | tr -d ' ')"
-  m=0; [ -s "$TMP/lock.before" ] && m="$(LC_ALL=C join "$TMP/lock.before" "$TMP/lock.after" | awk '$2 != $3' | wc -l | tr -d ' ')"
+  m=0; [ -s "$TMP/lock.before" ] && m="$(LC_ALL=C join "$TMP/lock.before" "$TMP/lock.after" 2>/dev/null | awk '$2 != $3' | wc -l | tr -d ' ' || echo 0)"
   echo "   $n plugins, $m updated"
   if [ -s "$TMP/lock.before" ]; then
     LC_ALL=C join "$TMP/lock.before" "$TMP/lock.after" | awk '$2 != $3 {print "nvim plugin " $1 " " $2 " -> " $3}' > "$TMP/plugins.done"
