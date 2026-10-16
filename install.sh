@@ -550,6 +550,7 @@ if [ "$NEED_OS" = 1 ]; then
       pacman)  sys_plan "package index" "pacman -Sy (refresh only, nothing upgraded)" ;;
       zypper)  sys_plan "package index" "zypper refresh (refresh only, nothing upgraded)" ;;
       apk)     sys_plan "package index" "apk update (refresh only, nothing upgraded)" ;;
+      brew)    [ "$NEED_BREW" = 0 ] && sys_plan "package index" "brew update (refreshes Homebrew itself, nothing upgraded)" ;;
     esac
   fi
   for p in ${MISS_REQ[@]+"${MISS_REQ[@]}"}; do v="$(pkg_version "$p")"; sys_plan "$p" "new ${v:-(version from the package index)}, $PM_CMD"; done
@@ -630,7 +631,8 @@ if [ "$NEED_SYS" = 1 ] && [ "$SUDO_OK" = 2 ]; then
 fi
 pm_add() { # pm_add PACKAGE...
   case "$PM" in
-    brew)    HOMEBREW_NO_INSTALL_UPGRADE=1 HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install "$@" ;;
+    brew)    HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_UPGRADE=1 \
+               HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install "$@" ;;
     apt-get) sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-upgrade "$@" ;;
     dnf)     sudo dnf install -y "$@" ;;
     yum)     sudo yum install -y "$@" ;;
@@ -654,7 +656,16 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
       pacman)  sudo pacman -Sy --noconfirm ;;
       zypper)  sudo zypper --non-interactive refresh || true ;;
       apk)     sudo apk update ;;
+      brew)    # quietly: its own output lists every new formula (hundreds of lines)
+               log "Updating Homebrew (brew update)"
+               brew update --quiet >/dev/null 2>&1 || warn "brew update failed, installing with the current package list" ;;
     esac
+  fi
+  # macOS: Homebrew stops with "You have not agreed to the Xcode license" when Xcode is
+  # installed but its license was never accepted; say so before anything is installed
+  if [ "$PM" = brew ] && has xcodebuild && xcode-select -p 2>/dev/null | grep -q '\.app/'; then
+    xcodebuild -license check >/dev/null 2>&1 \
+      || die "accept the Xcode license first: sudo xcodebuild -license accept   (then run this again)"
   fi
   if [ ${#MISS_REQ[@]} -gt 0 ]; then
     if ! pm_add "${MISS_REQ[@]}"; then
