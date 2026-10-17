@@ -647,6 +647,26 @@ if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then
   done
   [ "$NEED_FONT" = 1 ] && user_plan "JetBrainsMono Nerd Font" "new, brew install --cask (icons in nvim)"
 fi
+# Linux desktop (a graphical session, not over SSH; not WSL / Termux, whose terminal runs elsewhere):
+# JetBrainsMono Nerd Font into ~/.local/share/fonts so the terminal shows nvim's icons.
+# Servers you only ssh into need no font: your own terminal draws the text. DOTFILES_FONT=1|0 forces it.
+LINUX_FONT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/JetBrainsMonoNerdFont"
+NEED_LFONT=0; LFONT_VER=""
+if [ "$OS" = Linux ] && [ "$IS_WSL" = 0 ] && [ "$IS_TERMUX" = 0 ]; then
+  want_font=0
+  case "${DOTFILES_FONT:-}" in
+    1) want_font=1 ;;
+    0) ;;
+    *) if [ -z "${SSH_CONNECTION:-}" ] && { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ] \
+            || [ -n "${XDG_CURRENT_DESKTOP:-}" ]; }; then want_font=1; fi ;;
+  esac
+  if [ "$want_font" = 1 ] && [ ! -d "$LINUX_FONT_DIR" ] \
+     && ! { has fc-list && fc-list : family 2>/dev/null | grep -i 'JetBrainsMono Nerd' >/dev/null; }; then
+    NEED_LFONT=1
+    LFONT_VER="$(gh_latest ryanoasis/nerd-fonts)"
+    user_plan "JetBrainsMono Nerd Font" "new, ${LFONT_VER:-latest}, into ~/.local/share/fonts (icons in nvim)"
+  fi
+fi
 if [ "$USE_ITERM" = 1 ]; then
   if [ ! -f "$ITERM_PROFILES/dotfiles.json" ] || [ ! -f "$DOTFILES_DIR/iterm2/dotfiles.json" ] \
      || ! cmp -s "$DOTFILES_DIR/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"; then NEED_ITERM=1; fi
@@ -1001,11 +1021,26 @@ else
   fi
 fi
 
-# ---------- Ghostty and iTerm2 (macOS) ----------
+# ---------- Terminal font, Ghostty and iTerm2 ----------
 if [ "$NEED_GHOSTTY" = 1 ]; then
   log "Installing Ghostty"
   if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask ghostty >/dev/null 2>&1; then did "Ghostty (config: ~/.config/ghostty/config)"
   else failed "Ghostty (brew install --cask ghostty)"; fi
+fi
+if [ "$NEED_LFONT" = 1 ]; then
+  log "Installing JetBrainsMono Nerd Font"
+  if [ -n "$LFONT_VER" ]; then u="https://github.com/ryanoasis/nerd-fonts/releases/download/$LFONT_VER/JetBrainsMono.tar.xz"
+  else u="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz"; fi
+  rm -rf "$TMP/nerdfont"; mkdir -p "$TMP/nerdfont"
+  if fetch_once "$u" "$TMP/nerdfont.tar.xz" && tar -xJf "$TMP/nerdfont.tar.xz" -C "$TMP/nerdfont" \
+     && ls "$TMP"/nerdfont/JetBrainsMonoNerdFont-*.ttf >/dev/null 2>&1; then
+    # The regular and Mono (single-width icons) families; skip NL / Propo variants
+    mkdir -p "$LINUX_FONT_DIR"
+    cp "$TMP"/nerdfont/JetBrainsMonoNerdFont-*.ttf "$TMP"/nerdfont/JetBrainsMonoNerdFontMono-*.ttf "$LINUX_FONT_DIR"/
+    if has fc-cache; then fc-cache -f "$LINUX_FONT_DIR" >/dev/null 2>&1 || true; fi
+    did "JetBrainsMono Nerd Font${LFONT_VER:+ $LFONT_VER} (pick \"JetBrainsMono Nerd Font\" in your terminal's settings)"
+  else failed "JetBrainsMono Nerd Font ($u)"; fi
+  rm -rf "$TMP/nerdfont" "$TMP/nerdfont.tar.xz"
 fi
 if [ "$NEED_FONT" = 1 ]; then
   log "Installing JetBrainsMono Nerd Font"
