@@ -244,13 +244,13 @@ log "Checking what is installed and the latest versions"
 # Python is not here: each user gets their own from uv (below).
 case "$PM" in
   brew)    OS_REQ=(git tmux ripgrep:rg fd neovim:nvim node)
-           OS_OPT=(tree-sitter-cli:tree-sitter) ;;
+           OS_OPT=(tree-sitter-cli:tree-sitter lazygit) ;;
   apt-get) OS_REQ=(git curl unzip tar gzip xz-utils:xz tmux ripgrep:rg build-essential)
            if [ "$IS_TERMUX" = 1 ]; then
              # Termux: Neovim, Node.js, tree-sitter, uv and Python come from its packages too
              OS_REQ=(git curl unzip tar gzip xz-utils:xz tmux ripgrep:rg build-essential perl
                      neovim:nvim nodejs-lts:node tree-sitter python:python3 uv)
-             OS_OPT=(fd lua-language-server wget)
+             OS_OPT=(fd lua-language-server lazygit wget)
            else
              OS_OPT=(fd-find:fdfind clangd xclip perl wget)
            fi ;;
@@ -261,7 +261,7 @@ case "$PM" in
   zypper)  OS_REQ=(git curl unzip tar gzip xz tmux ripgrep:rg gcc gcc-c++:g++ make)
            OS_OPT=(fd clang-tools:clangd xclip perl wget) ;;
   apk)     OS_REQ=(bash git curl unzip tar gzip xz tmux perl ripgrep:rg build-base neovim:nvim nodejs:node npm)
-           OS_OPT=(fd clang-extra-tools:clangd lua-language-server tree-sitter-cli:tree-sitter xclip wget) ;;
+           OS_OPT=(fd clang-extra-tools:clangd lua-language-server tree-sitter-cli:tree-sitter lazygit xclip wget) ;;
 esac
 # Claude Code on musl needs libgcc / libstdc++ (and uses the system ripgrep, already required)
 [ "$PM" = apk ] && [ "$INSTALL_CLAUDE" = 1 ] && OS_REQ+=(libgcc libstdc++)
@@ -406,6 +406,7 @@ lk_claude() {
 if [ "$USE_PM_TOOLS" = 0 ]; then
   lookup ts "tree-sitter CLI" gh_latest tree-sitter/tree-sitter
   lookup uv "uv" gh_latest astral-sh/uv
+  lookup lazygit "lazygit" gh_latest jesseduffield/lazygit
   if [ -z "${PYTHON_VERSION:-}" ] && has uv; then lookup python "Python" lk_python; fi
 fi
 [ -d "$DOTFILES_DIR/.git" ] && lookup dotfiles "dotfiles" git_update "$DOTFILES_DIR"
@@ -465,6 +466,15 @@ UV_CUR=""; [ -x "$LOCAL_BIN/uv" ] && UV_CUR="$("$LOCAL_BIN/uv" --version 2>/dev/
 UV_LATEST="$(lookup_result uv)"
 NEED_UV=0; outdated "$UV_CUR" "$UV_LATEST" && NEED_UV=1
 [ "$IS_TERMUX" = 1 ] && NEED_UV=0 # from Termux's packages
+# lazygit (git UI, Space g g in nvim): a static binary in ~/.local/bin on Linux; macOS, Alpine and
+# Termux take it from their package manager (OS_OPT)
+LG_CUR=""; LG_LATEST=""; NEED_LG=0
+if [ "$USE_PM_TOOLS" = 0 ]; then
+  [ -x "$LOCAL_BIN/lazygit" ] && LG_CUR="v$("$LOCAL_BIN/lazygit" --version 2>/dev/null | sed -n 's/.*, version=\([^,]*\),.*/\1/p' || true)"
+  [ "$LG_CUR" = v ] && LG_CUR=""
+  LG_LATEST="$(lookup_result lazygit)"
+  outdated "$LG_CUR" "$LG_LATEST" && NEED_LG=1
+fi
 PY_CUR=""; [ -x "$LOCAL_BIN/python3" ] && PY_CUR="$("$LOCAL_BIN/python3" --version 2>/dev/null | awk '{print $2}' || true)"
 PY_LATEST=""
 if [ -n "${PYTHON_VERSION:-}" ]; then
@@ -561,6 +571,7 @@ fi
 [ "$NEED_NODE" = 1 ]     && user_plan "Node.js (LTS)" "$(change "$NODE_CUR" "$NODE_LATEST" "~/.local/opt/node")"
 [ "$NEED_TS" = 1 ]       && user_plan "tree-sitter CLI" "$(change "$TS_CUR" "$TS_LATEST" "~/.local/opt/tree-sitter-cli")"
 [ "$NEED_UV" = 1 ]       && user_plan "uv" "$(change "$UV_CUR" "$UV_LATEST" "~/.local/bin")"
+[ "$NEED_LG" = 1 ]       && user_plan "lazygit" "$(change "$LG_CUR" "$LG_LATEST" "~/.local/bin")"
 [ "$NEED_PY" = 1 ]       && user_plan "Python" "$(change "$PY_CUR" "$PY_LATEST" "with uv, python3 in ~/.local/bin")"
 [ "$NEED_DOTFILES" = 1 ] && user_plan "dotfiles" "new, clone to $DOTFILES_DIR"
 if [ -n "$DOTFILES_UPD" ]; then set -- $DOTFILES_UPD; user_plan "dotfiles" "$1 -> $2 ($3 new commits)"; fi
@@ -786,6 +797,22 @@ MASON_DIR="$DATA_HOME/nvim/mason"
 if [ -e "$MASON_DIR/bin/tree-sitter" ] && ! "$MASON_DIR/bin/tree-sitter" --version >/dev/null 2>&1; then
   log "Removing Mason's tree-sitter-cli (cannot run on this system)"
   rm -rf "$MASON_DIR/packages/tree-sitter-cli" "$MASON_DIR/bin/tree-sitter"
+fi
+
+# ---------- lazygit (per user, Linux) ----------
+if [ "$NEED_LG" = 1 ]; then
+  if [ -z "$LG_LATEST" ]; then
+    failed "lazygit (could not look up the latest release)"
+  else
+    log "Installing lazygit $LG_LATEST in ~/.local/bin"
+    case "$ARCH" in amd64) a=x86_64 ;; arm64) a=arm64 ;; esac
+    if fetch_once "https://github.com/jesseduffield/lazygit/releases/download/$LG_LATEST/lazygit_${LG_LATEST#v}_Linux_$a.tar.gz" "$TMP/lazygit.tgz" \
+       && tar -C "$TMP" -xzf "$TMP/lazygit.tgz" lazygit && mv -f "$TMP/lazygit" "$LOCAL_BIN/lazygit"; then
+      if [ -n "$LG_CUR" ]; then did "lazygit $LG_LATEST (was $LG_CUR)"; else did "lazygit $LG_LATEST"; fi
+    else
+      failed "lazygit"
+    fi
+  fi
 fi
 
 # ---------- uv and Python (per user) ----------

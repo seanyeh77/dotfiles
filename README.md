@@ -37,6 +37,7 @@ The leader key is `Space`. Press it and wait to see every binding.
 | `Space ac` / `Space as` | Open Claude / send the selection to Claude |
 | `Space aa` / `Space ad` | Accept / reject Claude's diff |
 | `Space gc` | Compare the file with a commit you pick (again to close) |
+| `Space gg` | lazygit: stage, commit, push, browse history |
 | `:qa` | Quit |
 
 Supported languages are Python, C/C++, TypeScript, Rust, Go, Bash, Lua, JSON, YAML, TOML, Docker, Markdown and CMake. To add one, run `:LazyExtras`, or add an import line to `nvim/lua/config/lazy.lua`.

@@ -25,3 +25,10 @@ if vim.env.SSH_CONNECTION or vim.env.SSH_TTY then
   }
   vim.opt.clipboard = "unnamedplus"
 end
+
+-- Remote-plugin hosts for Python, Node.js, Perl and Ruby: nothing in this config uses them,
+-- and turning them off removes the :checkhealth warnings about missing "neovim" packages
+vim.g.loaded_python3_provider = 0
+vim.g.loaded_node_provider = 0
+vim.g.loaded_perl_provider = 0
+vim.g.loaded_ruby_provider = 0
