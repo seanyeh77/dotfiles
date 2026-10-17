@@ -351,14 +351,19 @@ node_ok() { has node && [ "$(node -v | cut -d. -f1 | tr -d v)" -ge 18 ]; }
 ts_works() { local v; v="$("$1" --version 2>&1)" || return 1; case "$v" in *GLIBC*) return 1 ;; esac; return 0; }
 first_line() { printf '%s' "${1%%$'\n'*}"; }
 gh_latest() { # gh_latest OWNER/REPO: tag of the latest GitHub release, empty on failure
-  # Only the redirect header is needed (releases/latest -> releases/tag/vX), not the page
-  local u="" url="https://github.com/$1/releases/latest"
-  if has curl; then
-    u="$(curl -fsSI --connect-timeout 10 --max-time 20 -o /dev/null -w '%{redirect_url}' "$url" 2>/dev/null || true)"
-    case "$u" in */tag/*) ;; *) u="$(curl -fsSL --connect-timeout 10 --max-time 30 -o /dev/null -w '%{url_effective}' "$url" 2>/dev/null || true)" ;; esac
-  else u="$(wget -S --spider -T 20 --max-redirect=0 "$url" 2>&1 || true)"
-       u="$(printf '%s\n' "$u" | awk '/^ *Location:/ {x = $2} END {print x}')"; fi
-  case "$u" in */tag/*) printf '%s' "${u##*/tag/}" ;; esac
+  # Only the redirect header is needed (releases/latest -> releases/tag/vX), not the page.
+  # Tried twice: GitHub occasionally answers without the redirect.
+  local u="" url="https://github.com/$1/releases/latest" i
+  for i in 1 2; do
+    if has curl; then
+      u="$(curl -fsSI --connect-timeout 10 --max-time 20 -o /dev/null -w '%{redirect_url}' "$url" 2>/dev/null || true)"
+      case "$u" in */tag/*) ;; *) u="$(curl -fsSL --connect-timeout 10 --max-time 30 -o /dev/null -w '%{url_effective}' "$url" 2>/dev/null || true)" ;; esac
+    else u="$(wget -S --spider -T 20 --max-redirect=0 "$url" 2>&1 || true)"
+         u="$(printf '%s\n' "$u" | awk '/^ *Location:/ {x = $2} END {print x}')"; fi
+    case "$u" in */tag/*) printf '%s' "${u##*/tag/}"; return 0 ;; esac
+    [ "$i" = 1 ] && sleep 2
+  done
+  return 0
 }
 outdated() { # outdated CURRENT LATEST: true when not installed, or a newer version is known
   [ -z "$1" ] || { [ -n "$2" ] && [ "$1" != "$2" ]; }
@@ -854,6 +859,8 @@ if [ -e "$MASON_DIR/bin/tree-sitter" ] && ! "$MASON_DIR/bin/tree-sitter" --versi
 fi
 
 # ---------- lazygit (per user, Linux) ----------
+# The lookup may have failed (network blip, or curl was installed only just now): try again
+if [ "$NEED_LG" = 1 ] && [ -z "$LG_LATEST" ]; then LG_LATEST="$(gh_latest jesseduffield/lazygit)"; fi
 if [ "$NEED_LG" = 1 ]; then
   if [ -z "$LG_LATEST" ]; then
     failed "lazygit (could not look up the latest release)"
