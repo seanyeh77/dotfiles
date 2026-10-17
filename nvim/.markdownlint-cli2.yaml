@@ -1,0 +1,4 @@
+# markdownlint settings for every Markdown file (nvim/lua/plugins/markdown.lua passes this file)
+config:
+  MD013: false # line length: prose is wrapped by the editor, not by hand
+  MD060: false # table column style: pipes do not have to line up
