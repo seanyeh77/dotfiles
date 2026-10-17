@@ -21,5 +21,10 @@ for k in A '|' - _ h j k l; do
   check "prefix + $k" "$r" "bound"
 done
 "${T[@]}" kill-server
+# trzsz: tsz / trz move files over an ssh session (also inside tmux)
+for c in trz tsz trzsz; do
+  if command -v "$c" >/dev/null 2>&1; then r=found; else r=missing; fi
+  check "$c on PATH" "$r" "found"
+done
 echo "========== tmux: $failed failed =========="
 exit "$failed"

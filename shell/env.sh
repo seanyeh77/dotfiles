@@ -26,6 +26,21 @@ if [ -n "${ZSH_VERSION:-}" ] && [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] \
   . "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"
 fi
 
+# ssh through trzsz (on your own computer, not inside an ssh session): on the server, `tsz FILE`
+# saves FILE on this computer (~/Downloads, set in ~/.trzsz.conf) and `trz` uploads, also inside
+# tmux. Ghostty's terminal type is replaced by xterm-256color, which every server knows.
+# `command ssh` is the plain one. Without a terminal (scripts, pipes) it is plain ssh too.
+dotfiles_ssh() {
+  if [ -t 0 ] && [ -t 1 ] && command -v trzsz >/dev/null 2>&1; then
+    if [ "${TERM:-}" = xterm-ghostty ]; then TERM=xterm-256color trzsz ssh "$@"; else trzsz ssh "$@"; fi
+  else
+    command ssh "$@"
+  fi
+}
+if [ -z "${SSH_CONNECTION:-}" ] && command -v trzsz >/dev/null 2>&1; then
+  alias ssh=dotfiles_ssh
+fi
+
 # sshk HOST: ssh, but first copy your ed25519 key there if the host does not accept it yet (asks
 # for the password once), so later logins need no password. Creates ~/.ssh/id_ed25519 if missing
 # (an RSA key is not used, even if you have one).
@@ -35,5 +50,5 @@ sshk() {
   if ! command ssh -o BatchMode=yes -o ConnectTimeout=5 -o IdentitiesOnly=yes -i "$_k" "$@" true >/dev/null 2>&1; then
     ssh-copy-id -i "$_k.pub" "$@" || return
   fi
-  ssh "$@"
+  dotfiles_ssh "$@"
 }

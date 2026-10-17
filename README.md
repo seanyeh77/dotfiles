@@ -96,6 +96,17 @@ The prefix is `Ctrl-a`.
 | `C-a [` | Copy mode: `v` to select, `y` to copy |
 | `C-a A` | Open Claude Code, connected to the nvim in the same folder |
 
+## Files over SSH
+
+[trzsz](https://github.com/trzsz/trzsz-go) is installed on every machine, and on your own computer `ssh` runs through it. On a server, also inside tmux:
+
+| Command | Action |
+| --- | --- |
+| `tsz FILE...` | Download to your computer's `~/Downloads` (set in `~/.trzsz.conf`) |
+| `trz` | Upload: pick files on your computer, they land in the current folder |
+
+The server needs `trz` / `tsz` too: this installer puts them there, or `pip install trzsz`. `command ssh` is the plain ssh.
+
 ## Shell
 
 `~/.config/dotfiles/env.sh` (from `shell/env.sh`) is loaded from `~/.bashrc` and `~/.zshrc`. It puts `~/.local/bin` and Mason's tools on `PATH`, loads Ghostty's shell integration, and adds:

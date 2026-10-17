@@ -486,7 +486,7 @@ export GIT_TERMINAL_PROMPT=0
 # Python is not here: each user gets their own from uv (below).
 case "$PM" in
   brew)    OS_REQ=(git tmux ripgrep:rg fd neovim:nvim node)
-           OS_OPT=(tree-sitter-cli:tree-sitter lazygit) ;;
+           OS_OPT=(tree-sitter-cli:tree-sitter lazygit trzsz-go:trzsz) ;;
   apt-get) OS_REQ=(git curl unzip tar gzip xz-utils:xz findutils:find tmux ripgrep:rg build-essential)
            if [ "$IS_TERMUX" = 1 ]; then
              # Termux: Neovim, Node.js, tree-sitter, uv and Python come from its packages too
@@ -674,6 +674,7 @@ lk_dotfiles() { # the commit this install would use
   elif has git; then timeout_cmd 30 git ls-remote "$DOTFILES_REPO" HEAD 2>/dev/null | awk '{print $1}'; fi
 }
 lookup dotfiles "dotfiles" lk_dotfiles
+[ "$PM" != brew ] && lookup trzsz "trzsz" gh_latest trzsz/trzsz-go
 [ -d "$OH_MY_TMUX/.git" ] && lookup omt "Oh my tmux!" git_update "$OH_MY_TMUX"
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   lookup claude "Claude Code" lk_claude
@@ -734,6 +735,18 @@ UV_CUR=""; [ -x "$LOCAL_BIN/uv" ] && UV_CUR="$("$LOCAL_BIN/uv" --version 2>/dev/
 UV_LATEST="$(lookup_result uv)"
 NEED_UV=0; outdated "$UV_CUR" "$UV_LATEST" && NEED_UV=1
 [ "$IS_TERMUX" = 1 ] && NEED_UV=0 # from Termux's packages
+# trzsz (trz / tsz): file transfer over the ssh session itself. `tsz FILE` on a server saves the
+# file on your computer, `trz` uploads; it works inside tmux. Static binaries in ~/.local/bin on
+# Linux, Alpine and Termux (Android build); Homebrew's trzsz-go on macOS (OS_OPT).
+TZ_CUR=""; TZ_LATEST=""; NEED_TZ=0
+if [ "$PM" != brew ]; then
+  if [ -x "$LOCAL_BIN/tsz" ]; then
+    v="$("$LOCAL_BIN/tsz" --version 2>&1 || true)"
+    TZ_CUR="$(printf '%s\n' "$v" | awk 'match($0, /[0-9]+\.[0-9]+\.[0-9]+/) {print "v" substr($0, RSTART, RLENGTH); exit}')"
+  fi
+  TZ_LATEST="$(lookup_result trzsz)"
+  outdated "$TZ_CUR" "$TZ_LATEST" && NEED_TZ=1
+fi
 # lazygit (git UI, Space g g in nvim): a static binary in ~/.local/bin on Linux; macOS, Alpine and
 # Termux take it from their package manager (OS_OPT)
 LG_CUR=""; LG_LATEST=""; NEED_LG=0
@@ -880,6 +893,7 @@ fi
 [ "$NEED_TS" = 1 ]       && user_plan "tree-sitter CLI" "$(change "$TS_CUR" "$TS_LATEST" "~/.local/opt/tree-sitter-cli")"
 [ "$NEED_UV" = 1 ]       && user_plan "uv" "$(change "$UV_CUR" "$UV_LATEST" "~/.local/bin")"
 [ "$NEED_LG" = 1 ]       && user_plan "lazygit" "$(change "$LG_CUR" "$LG_LATEST" "~/.local/bin")"
+[ "$NEED_TZ" = 1 ]       && user_plan "trzsz" "$(change "$TZ_CUR" "$TZ_LATEST" "~/.local/bin (tsz / trz: download / upload over ssh)")"
 [ "$NEED_PY" = 1 ]       && user_plan "Python" "$(change "$PY_CUR" "$PY_LATEST" "with uv, python3 in ~/.local/bin")"
 [ "$NEED_DOTFILES" = 1 ] && user_plan "dotfiles" "$(change "$DF_CUR" "$DF_LATEST" "copied into ~/.config/nvim, ~/.tmux.conf.local, ...")"
 [ "$RM_OLD" = 1 ] && user_plan "old ~/dotfiles" "removed (no longer used: the config is copied into place)"
@@ -1250,6 +1264,33 @@ MASON_DIR="$DATA_HOME/nvim/mason"
 if [ -e "$MASON_DIR/bin/tree-sitter" ] && ! "$MASON_DIR/bin/tree-sitter" --version >/dev/null 2>&1; then
   step "Removing Mason's tree-sitter-cli (cannot run on this system)"
   rm -rf "$MASON_DIR/packages/tree-sitter-cli" "$MASON_DIR/bin/tree-sitter"
+fi
+
+# ---------- trzsz (per user, Linux / Termux) ----------
+if [ "$NEED_TZ" = 1 ] && [ -z "$TZ_LATEST" ]; then TZ_LATEST="$(gh_latest trzsz/trzsz-go)"; fi
+if [ "$NEED_TZ" = 1 ]; then
+  if [ -z "$TZ_LATEST" ]; then
+    step "Installing trzsz"
+    failed "trzsz (could not look up the latest release)"
+  else
+    step "Installing trzsz $TZ_LATEST in ~/.local/bin"
+    case "$ARCH" in amd64) a=x86_64 ;; arm64) a=aarch64 ;; esac
+    o=linux; [ "$IS_TERMUX" = 1 ] && o=android
+    d="trzsz_${TZ_LATEST#v}_${o}_$a"
+    if fetch_once "https://github.com/trzsz/trzsz-go/releases/download/$TZ_LATEST/$d.tar.gz" "$TMP/trzsz.tgz" \
+       && tar -C "$TMP" -xzf "$TMP/trzsz.tgz" && [ -x "$TMP/$d/tsz" ]; then
+      for b in trz tsz trzsz; do [ -f "$TMP/$d/$b" ] && mv -f "$TMP/$d/$b" "$LOCAL_BIN/$b"; done
+      if [ -n "$TZ_CUR" ]; then did "trzsz $TZ_LATEST (was $TZ_CUR)"; else did "trzsz $TZ_LATEST (tsz FILE downloads, trz uploads)"; fi
+    else
+      failed "trzsz"
+    fi
+  fi
+fi
+# Where downloads go: straight to ~/Downloads, no dialog each time (~/.trzsz.conf, kept if you have one)
+if [ ! -e "$HOME/.trzsz.conf" ] && { [ "$OS" = Darwin ] || [ -d "$HOME/Downloads" ]; }; then
+  mkdir -p "$HOME/Downloads"
+  printf 'DefaultDownloadPath = %s/Downloads/\n' "$HOME" > "$HOME/.trzsz.conf"
+  did "~/.trzsz.conf: tsz saves into ~/Downloads"
 fi
 
 # ---------- lazygit (per user, Linux) ----------
