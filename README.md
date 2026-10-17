@@ -94,4 +94,4 @@ The prefix is `Ctrl-a`.
 
 | Command | Action |
 | --- | --- |
-| `sshk host` | ssh, but first copy your SSH key to the host if needed, so later logins need no password |
+| `sshk host` | ssh, but first copy your ed25519 key (`~/.ssh/id_ed25519`, created if missing) to the host if needed, so later logins need no password |

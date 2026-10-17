@@ -26,13 +26,14 @@ if [ -n "${ZSH_VERSION:-}" ] && [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] \
   . "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"
 fi
 
-# sshk HOST: ssh, but first copy your SSH key there if it does not accept it yet (asks for the
-# password once), so later logins need no password. Creates ~/.ssh/id_ed25519 if you have no key.
+# sshk HOST: ssh, but first copy your ed25519 key there if the host does not accept it yet (asks
+# for the password once), so later logins need no password. Creates ~/.ssh/id_ed25519 if missing
+# (an RSA key is not used, even if you have one).
 sshk() {
-  [ -f "$HOME/.ssh/id_ed25519.pub" ] || [ -f "$HOME/.ssh/id_rsa.pub" ] \
-    || ssh-keygen -q -t ed25519 -N "" -f "$HOME/.ssh/id_ed25519" || return
-  if ! command ssh -o BatchMode=yes -o ConnectTimeout=5 "$@" true >/dev/null 2>&1; then
-    ssh-copy-id "$@" || return
+  _k="$HOME/.ssh/id_ed25519"
+  [ -f "$_k.pub" ] || ssh-keygen -q -t ed25519 -N "" -f "$_k" || return
+  if ! command ssh -o BatchMode=yes -o ConnectTimeout=5 -o IdentitiesOnly=yes -i "$_k" "$@" true >/dev/null 2>&1; then
+    ssh-copy-id -i "$_k.pub" "$@" || return
   fi
   ssh "$@"
 }
