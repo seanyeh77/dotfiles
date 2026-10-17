@@ -35,8 +35,10 @@ macos-option-as-alt = left
 clipboard-write = allow
 clipboard-read = ask
 
-# Over SSH: send Ghostty's terminfo to the server and set TERM so remote programs work
-shell-integration-features = ssh-env,ssh-terminfo
+# Over SSH: present TERM=xterm-256color, which every server knows (colour prompts, Ctrl-L), and
+# pass COLORTERM / TERM_PROGRAM; locally TERM stays xterm-ghostty. No terminfo is installed on
+# servers (ssh-terminfo would keep xterm-ghostty there, which e.g. Debian's bashrc does not colour).
+shell-integration-features = ssh-env,no-ssh-terminfo
 
 window-padding-x = 6
 window-padding-y = 4

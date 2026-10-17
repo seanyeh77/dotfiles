@@ -17,7 +17,7 @@ unset _d
 export PATH
 
 # Ghostty shell integration (zsh), loaded by hand in case auto-injection did not happen
-# (e.g. ZDOTDIR is changed): it wraps `ssh` so remote hosts get Ghostty's terminfo
+# (e.g. ZDOTDIR is changed): it wraps `ssh` so remote hosts see TERM=xterm-256color
 # (Ctrl-L, colours). No-op outside Ghostty or when it is already loaded.
 # shellcheck disable=SC3044  # zsh only
 if [ -n "${ZSH_VERSION:-}" ] && [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] \
