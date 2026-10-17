@@ -69,7 +69,9 @@ tmux_conf_new_pane_reconnect_ssh=false
 # automatic detection relies on the COLORTERM environment variable being defined
 # to 'truecolor' or '24bit' or '$ tput colors' answering '16777216'
 # see https://github.com/termstandard/colors
-tmux_conf_24b_colour=auto
+# true: over SSH COLORTERM rarely reaches the server (sshd only accepts LANG / LC_* by default),
+# and the terminals this repo sets up (iTerm2, Ghostty, Windows Terminal, Termux) all do 24-bit
+tmux_conf_24b_colour=true
 
 
 # -- theming -------------------------------------------------------------------
