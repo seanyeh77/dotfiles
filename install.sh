@@ -27,7 +27,11 @@ if [ -z "${BASH_VERSION:-}" ] || [ "$DOTFILES_POSIX" = 1 ]; then
   else
     wget -qO- "$DOTFILES_URL" | bash -s -- "$@"
   fi
-  exit $?
+  DOTFILES_RC=$?
+  # Read the rest of this script from the pipe, so the download feeding it (curl ... | zsh)
+  # finishes cleanly instead of failing to write once the script is larger than the pipe buffer
+  [ -t 0 ] || cat >/dev/null 2>&1
+  exit $DOTFILES_RC
 fi
 
 # Everything is wrapped in { ... } so bash reads the whole script before running any of it.
