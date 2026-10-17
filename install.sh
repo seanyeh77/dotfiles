@@ -918,6 +918,13 @@ link() { # back up existing config instead of overwriting it
 link "$DOTFILES_DIR/nvim" "$HOME/.config/nvim"
 if [ "$OS" != Darwin ] || [ "$USE_GHOSTTY" = 1 ]; then
   link "$DOTFILES_DIR/ghostty/config" "$HOME/.config/ghostty/config"
+  # Ghostty on macOS also loads a config in Application Support, after (and over) this one: back it up
+  for f in "$HOME/Library/Application Support/com.mitchellh.ghostty/config" \
+           "$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty"; do
+    if [ -s "$f" ] && [ ! -L "$f" ]; then
+      mv "$f" "$f.bak.$(date +%s)" && did "Ghostty: moved your old config aside (${f##*/}.bak.*), ~/.config/ghostty/config is used now"
+    fi
+  done
 fi
 
 # tmux: Oh my tmux! (https://github.com/gpakosz/.tmux) plus this repo's tmux/tmux.conf.local
