@@ -12,7 +12,10 @@ curl -fsSL seanyeh77.github.io/dotfiles | bash
 
 It first shows a plan with versions and asks once. Run it again to update.
 
+No copy of this repo stays behind: the files are copied into place (`~/.config/nvim`, `~/.tmux.conf.local`, `~/.config/ghostty/config`, and `~/.config/dotfiles` for the shell setup and git hooks), and the download is deleted. On an update, a file you edited is saved as `<name>.bak.<time>` before it is replaced, and files you added are left alone. The `~/dotfiles` folder of older versions is removed (kept if it has changes of yours).
+
 - **System** (sudo, every user): only missing OS packages such as git, tmux, compilers and ripgrep; installed ones are never upgraded. Without sudo rights this step is skipped.
+- **Docker** (asked, default no): Docker Desktop on macOS, Docker Engine with Compose on Linux, and you are added to the `docker` group so it runs without sudo (log in again first). Only offered when you have sudo; if Docker is already there, only the group is offered.
 - **Only you** (`~`, no sudo): Neovim, Node.js LTS, tree-sitter, [uv](https://docs.astral.sh/uv/), Python, lazygit, nvim plugins, LSP servers and Claude Code, kept at the latest release.
 - **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine, WSL and Termux, on amd64 or arm64.
 
@@ -40,15 +43,15 @@ Set them before `bash`, e.g. `curl -fsSL seanyeh77.github.io/dotfiles | DOTFILES
 
 | Variable | Effect |
 | --- | --- |
-| `DOTFILES_ASK=1` | Ask the Claude Code questions again |
-| `INSTALL_CLAUDE=1\|0`, `CLAUDE_PLUGINS="a b"` | Answer them up front |
+| `DOTFILES_ASK=1` | Ask the questions again (Claude Code, Docker) |
+| `INSTALL_CLAUDE=1\|0`, `CLAUDE_PLUGINS="a b"`, `INSTALL_DOCKER=1\|0` | Answer them up front |
 | `ASSUME_YES=1` | Do not ask before installing |
 | `NO_SUDO=1` / `USE_SUDO=1` | Never use sudo / ask for the sudo password even if you are not in an admin group |
 | `PYTHON_VERSION=3.13` | Pin Python instead of the latest |
 | `DOTFILES_TERMINAL=iterm2\|ghostty\|none` | Set up only that terminal (`ghostty` installs it if missing) |
 | `NO_ITERM=1` / `NO_GHOSTTY=1` | Skip one terminal |
 | `DOTFILES_FONT=1\|0` | Install the Nerd Font or not |
-| `DOTFILES_DIR` | Where the repo goes (default `~/dotfiles`) |
+| `DOTFILES_DIR=PATH` | Install from this checkout instead of downloading the repo (the checkout is kept) |
 
 ## Neovim
 
@@ -90,7 +93,7 @@ The prefix is `Ctrl-a`.
 
 ## Shell
 
-`shell/env.sh` is loaded from `~/.bashrc` and `~/.zshrc`. It puts `~/.local/bin` and Mason's tools on `PATH`, loads Ghostty's shell integration, and adds:
+`~/.config/dotfiles/env.sh` (from `shell/env.sh`) is loaded from `~/.bashrc` and `~/.zshrc`. It puts `~/.local/bin` and Mason's tools on `PATH`, loads Ghostty's shell integration, and adds:
 
 | Command | Action |
 | --- | --- |

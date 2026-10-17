@@ -83,14 +83,14 @@ jobs:
       matrix:
         include:
           - { image: "debian:12" }
-          - { image: "debian:13" }
+          - { image: "debian:13", docker: true } # Docker from get.docker.com
           - { image: "debian:12", arch: arm64, rerun: true } # old glibc + arm64, and a re-run
           - { image: "debian:13", arch: arm64 }
           - { image: "ubuntu:22.04", arch: arm64 } # glibc 2.35: the prebuilt tree-sitter refuses to run
           - { image: "ubuntu:22.04" }
           - { image: "fedora:latest" }
-          - { image: "rockylinux:9" }
-          - { image: "archlinux:latest" }
+          - { image: "rockylinux:9", docker: true } # Docker from its CentOS repository
+          - { image: "archlinux:latest", docker: true } # Docker from the distro
           - { image: "opensuse/tumbleweed" }
           - { image: "alpine:latest", experimental: true } # musl: some Mason binaries cannot run
     steps:
@@ -118,6 +118,11 @@ jobs:
         shell: bash -o pipefail {0}
         env:
           DOTFILES_DIR: ${{ github.workspace }}
+          INSTALL_DOCKER: ${{ matrix.docker && '1' || '0' }}
+      - name: Docker was installed
+        if: matrix.docker
+        shell: bash
+        run: docker --version && docker compose version
       # Reproduces a real failure: a Mason tree-sitter that needs glibc 2.39 shadowing the
       # working one on PATH (old env.sh put Mason first), then re-running the installer
       - name: re-run install.sh with a broken Mason tree-sitter first on PATH
@@ -172,8 +177,11 @@ jobs:
         run: |
           for u in alice bob; do
             cp -r "$GITHUB_WORKSPACE" "/home/$u/dotfiles" && chown -R "$u:$u" "/home/$u/dotfiles"
-            su - "$u" -c "DOTFILES_DIR=/home/$u/dotfiles bash /home/$u/dotfiles/install.sh" 2>&1 | tee -a "$RUNNER_TEMP/install.log"
+            su - "$u" -c "INSTALL_DOCKER=1 DOTFILES_DIR=/home/$u/dotfiles bash /home/$u/dotfiles/install.sh" 2>&1 | tee -a "$RUNNER_TEMP/install.log"
           done
+          # Docker needs sudo: it is not planned, and the user is told why
+          grep -q "Docker needs sudo" "$RUNNER_TEMP/install.log"
+          ! grep -E "^ +Docker +new" "$RUNNER_TEMP/install.log"
       - name: verify as alice
         shell: bash -o pipefail {0}
         run: su - alice -c 'bash -lc "nvim --headless -c \"luafile ~/dotfiles/ci/verify.lua\""' 2>&1 | tee "$RUNNER_TEMP/verify.log"
@@ -237,6 +245,7 @@ jobs:
     steps:
       # Write the whole PATH: in container jobs GITHUB_PATH rebuilds PATH from the image config,
       # and images without a PATH entry (openSUSE Tumbleweed) end up with only ~/.local/bin
+      - uses: actions/checkout@v5 # only for the ci/ scripts; the install itself downloads the repo
       - name: put ~/.local/bin on PATH (steps do not read ~/.bashrc)
         run: echo "PATH=$HOME/.local/bin:$PATH" >> "$GITHUB_ENV"
         shell: bash
@@ -256,12 +265,19 @@ jobs:
         shell: bash -o pipefail {0}
         env:
           DOTFILES_REPO: https://github.com/${{ github.repository }}
+      - name: nothing depends on a copy of the repo
+        shell: bash
+        run: |
+          ! test -e "$HOME/dotfiles"
+          test -d "$HOME/.config/nvim" && ! test -L "$HOME/.config/nvim"
+          test -f "$HOME/.tmux.conf.local" && ! test -L "$HOME/.tmux.conf.local"
+          grep -q '.config/dotfiles/env.sh" # dotfiles' "$HOME/.bashrc"
       - name: verify
-        run: nvim --headless -c "luafile $HOME/dotfiles/ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
+        run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
         shell: bash -o pipefail {0}
       - name: verify tmux
-        run: bash "$HOME/dotfiles/ci/verify-tmux.sh" 2>&1 | tee "$RUNNER_TEMP/verify-tmux.log"
+        run: bash ci/verify-tmux.sh 2>&1 | tee "$RUNNER_TEMP/verify-tmux.log"
         shell: bash -o pipefail {0}
       - name: report failure
         if: failure() || cancelled()
-        run: bash "$HOME/dotfiles/ci/annotate.sh" "$RUNNER_TEMP"
+        run: bash ci/annotate.sh "$RUNNER_TEMP"

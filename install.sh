@@ -36,7 +36,13 @@ fi
 set -euo pipefail
 
 DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/seanyeh77/dotfiles}"
-DOTFILES_DIR="${DOTFILES_DIR:-$HOME/dotfiles}"
+# Nothing depends on a copy of this repo after the install: its files are copied into place
+# (~/.config/nvim, ~/.tmux.conf.local, ...) from a temporary clone that is deleted at the end.
+# DOTFILES_DIR=PATH installs from that checkout instead (it is kept), e.g. to try local changes.
+DOTFILES_DIR="${DOTFILES_DIR:-}"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+STATE_DIR="$CONFIG_HOME/dotfiles"   # env.sh, git hooks, installed version, saved answers
+OLD_DOTFILES="$HOME/dotfiles"       # where older versions of this installer kept the repo
 
 log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
@@ -186,10 +192,6 @@ if [ "$INSTALL_CLAUDE" = 1 ] && [ -z "${CLAUDE_PLUGINS+set}" ]; then
 fi
 CLAUDE_PLUGINS="$(echo ${CLAUDE_PLUGINS:-})" # normalize spaces
 case "$CLAUDE_PLUGINS" in none|NONE) CLAUDE_PLUGINS="" ;; esac
-if [ "$ASKED" = 1 ]; then
-  mkdir -p "$(dirname "$ANSWERS")"
-  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\n' "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" > "$ANSWERS"
-fi
 SAVED_NOTE=""; [ "$SAVED_ANSWERS" = 1 ] && SAVED_NOTE=" (saved answer; DOTFILES_ASK=1 asks again)"
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   n=0; for p in $CLAUDE_PLUGINS; do n=$((n + 1)); done
@@ -221,6 +223,38 @@ elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
   fi
   # Otherwise sudo is installed but this user is not an admin (a shared server or cluster):
   # do not ask for a password that cannot work. USE_SUDO=1 asks anyway.
+fi
+
+# Docker (asked; INSTALL_DOCKER=1/0 presets the answer). It is a system install, so it is only
+# offered with root, sudo or Homebrew. On Linux you are also added to the docker group, so docker
+# runs without sudo (that group is as powerful as root on this machine).
+in_docker_group() { id -nG 2>/dev/null | tr ' ' '\n' | grep -x docker >/dev/null; }
+DOCKER_TODO="" # install | group | empty
+if [ "$IS_TERMUX" = 1 ]; then :            # Android: no kernel support for containers
+elif ! has docker; then DOCKER_TODO=install
+elif [ "$OS" = Linux ] && [ "$(id -u)" -ne 0 ] && ! in_docker_group; then DOCKER_TODO=group
+fi
+if [ -n "$DOCKER_TODO" ] && [ "$SUDO_OK" = 0 ]; then
+  if [ "${INSTALL_DOCKER:-0}" = 1 ]; then warn "Docker needs sudo, which you do not have here: ask an admin (or use rootless Docker / Podman)"
+  else log "Docker: not offered, it needs sudo"; fi
+  DOCKER_TODO=""
+fi
+if [ -z "$DOCKER_TODO" ]; then
+  INSTALL_DOCKER="${INSTALL_DOCKER:-0}"
+elif [ -z "${INSTALL_DOCKER:-}" ]; then
+  INSTALL_DOCKER=0
+  if [ "$HAS_TTY" = 1 ]; then
+    ASKED=1
+    if [ "$DOCKER_TODO" = install ]; then ask "Install Docker (system-wide, with sudo)? [y/N]" n
+    else ask "Docker is installed: add you to the docker group, to run docker without sudo? [y/N]" n; fi
+    case "$REPLY" in [Yy]*) INSTALL_DOCKER=1 ;; esac
+  fi
+fi
+[ "$INSTALL_DOCKER" = 1 ] || DOCKER_TODO=""
+if [ -n "$DOCKER_TODO" ]; then log "Docker: yes"; fi
+if [ "$ASKED" = 1 ]; then
+  mkdir -p "$(dirname "$ANSWERS")"
+  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nINSTALL_DOCKER=%s\n' "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "$INSTALL_DOCKER" > "$ANSWERS"
 fi
 # Bound slow steps so a network problem cannot hang forever. macOS has no `timeout`: use gtimeout
 # (coreutils) or perl's alarm, which kills the command when the time is up.
@@ -413,7 +447,11 @@ if [ "$USE_PM_TOOLS" = 0 ]; then
   lookup lazygit "lazygit" gh_latest jesseduffield/lazygit
   if [ -z "${PYTHON_VERSION:-}" ] && has uv; then lookup python "Python" lk_python; fi
 fi
-[ -d "$DOTFILES_DIR/.git" ] && lookup dotfiles "dotfiles" git_update "$DOTFILES_DIR"
+lk_dotfiles() { # the commit this install would use
+  if [ -n "$DOTFILES_DIR" ]; then git -c safe.directory="$DOTFILES_DIR" -C "$DOTFILES_DIR" rev-parse HEAD 2>/dev/null
+  elif has git; then timeout_cmd 30 git ls-remote "$DOTFILES_REPO" HEAD 2>/dev/null | awk '{print $1}'; fi
+}
+lookup dotfiles "dotfiles" lk_dotfiles
 [ -d "$OH_MY_TMUX/.git" ] && lookup omt "Oh my tmux!" git_update "$OH_MY_TMUX"
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   lookup claude "Claude Code" lk_claude
@@ -492,9 +530,23 @@ elif [ -n "${PYTHON_VERSION:-}" ]; then case "$PY_CUR" in "$PYTHON_VERSION"|"$PY
 elif outdated "$PY_CUR" "$PY_LATEST"; then NEED_PY=1; fi
 [ "$IS_TERMUX" = 1 ] && NEED_PY=0 # from Termux's packages (uv cannot download Python for Android)
 
-# Configuration repos (git): cloned when missing, fast-forwarded when the remote has new commits
-NEED_DOTFILES=0; DOTFILES_UPD=""
-if [ -d "$DOTFILES_DIR/.git" ]; then DOTFILES_UPD="$(lookup_result dotfiles)"; else NEED_DOTFILES=1; fi
+# Oh my tmux! (git): cloned when missing, fast-forwarded when the remote has new commits
+# This repo's config files: compared by commit here; the files themselves when they are copied
+DF_CUR="$(cat "$STATE_DIR/version" 2>/dev/null || true)"; DF_LATEST="$(lookup_result dotfiles)"
+DF_CUR="${DF_CUR:0:7}"; DF_LATEST="${DF_LATEST:0:7}"
+NEED_DOTFILES=0; outdated "$DF_CUR" "$DF_LATEST" && NEED_DOTFILES=1
+# The ~/dotfiles clone of older installs: removed once nothing uses it, unless it has changes of yours
+RM_OLD=0
+if [ "$DOTFILES_DIR" != "$OLD_DOTFILES" ] && [ -d "$OLD_DOTFILES/.git" ] && has git; then
+  og() { git -c safe.directory="$OLD_DOTFILES" -C "$OLD_DOTFILES" "$@"; }
+  case "$(og remote get-url origin 2>/dev/null || true)" in
+    *seanyeh77/dotfiles*|"$DOTFILES_REPO"*)
+      # nvim/lazy-lock.json used to be rewritten by plugin updates: not a change of yours
+      if [ -z "$(og status --porcelain 2>/dev/null | grep -v ' nvim/lazy-lock.json$' || true)" ] \
+         && [ -z "$(og log --oneline '@{u}..HEAD' 2>/dev/null || echo x)" ]; then RM_OLD=1
+      else warn "~/dotfiles has changes of yours, so it is kept; nothing uses it any more"; fi ;;
+  esac
+fi
 NEED_OMT=0; OMT_UPD=""
 if [ -d "$OH_MY_TMUX/.git" ]; then OMT_UPD="$(lookup_result omt)"; else NEED_OMT=1; fi
 
@@ -570,6 +622,25 @@ if [ "$NEED_OS" = 1 ]; then
   for p in ${MISS_REQ[@]+"${MISS_REQ[@]}"}; do v="$(pkg_version "$p")"; sys_plan "$p" "new ${v:-(version from the package index)}, $PM_CMD"; done
   for p in ${MISS_OPT[@]+"${MISS_OPT[@]}"}; do v="$(pkg_version "$p")"; sys_plan "$p" "new ${v:-(version from the package index)}, $PM_CMD, optional"; done
 fi
+# Docker: Docker Desktop on macOS; on Linux Docker Engine with Compose and Buildx
+OS_ID=""; [ -r /etc/os-release ] && OS_ID="$(. /etc/os-release && echo "${ID:-}")"
+case "$PM" in
+  brew)    DOCKER_HOW="Docker Desktop, brew install --cask (open it once to finish the setup)" ;;
+  apt-get) DOCKER_HOW="Docker Engine + Compose, from download.docker.com (get.docker.com)" ;;
+  dnf|yum) if [ "$OS_ID" = fedora ] || [ "$PM" = yum ]; then DOCKER_HOW="Docker Engine + Compose, from download.docker.com (get.docker.com)"
+           else DOCKER_HOW="Docker Engine + Compose, from download.docker.com (docker-ce repo)"; fi ;;
+  pacman)  DOCKER_HOW="Docker Engine + Compose, pacman -S docker docker-compose docker-buildx" ;;
+  zypper)  DOCKER_HOW="Docker Engine + Compose, zypper install docker docker-compose" ;;
+  apk)     DOCKER_HOW="Docker Engine + Compose, apk add docker docker-cli-compose" ;;
+esac
+NEED_DOCKER=0; NEED_DOCKER_GROUP=0
+if [ "$DOCKER_TODO" = install ]; then
+  NEED_DOCKER=1; NEED_SYS=1; sys_plan "Docker" "new, $DOCKER_HOW"
+  [ "$OS" = Linux ] && [ "$(id -u)" -ne 0 ] && NEED_DOCKER_GROUP=1
+elif [ "$DOCKER_TODO" = group ]; then
+  NEED_DOCKER_GROUP=1; NEED_SYS=1
+fi
+[ "$NEED_DOCKER_GROUP" = 1 ] && sys_plan "docker group" "add $(id -un), to run docker without sudo (takes effect at your next login)"
 [ "$OLD_TS_LINK" = 1 ] && sys_plan "old link" "rm /usr/local/bin/tree-sitter (points into one user's ~/.cargo)"
 [ "$NEED_NVIM" = 1 ]     && user_plan "Neovim" "$(change "$NVIM_CUR" "$NVIM_LATEST" "~/.local/opt/nvim")"
 [ "$NEED_NODE" = 1 ]     && user_plan "Node.js (LTS)" "$(change "$NODE_CUR" "$NODE_LATEST" "~/.local/opt/node")"
@@ -577,8 +648,8 @@ fi
 [ "$NEED_UV" = 1 ]       && user_plan "uv" "$(change "$UV_CUR" "$UV_LATEST" "~/.local/bin")"
 [ "$NEED_LG" = 1 ]       && user_plan "lazygit" "$(change "$LG_CUR" "$LG_LATEST" "~/.local/bin")"
 [ "$NEED_PY" = 1 ]       && user_plan "Python" "$(change "$PY_CUR" "$PY_LATEST" "with uv, python3 in ~/.local/bin")"
-[ "$NEED_DOTFILES" = 1 ] && user_plan "dotfiles" "new, clone to $DOTFILES_DIR"
-if [ -n "$DOTFILES_UPD" ]; then set -- $DOTFILES_UPD; user_plan "dotfiles" "$1 -> $2 ($3 new commits)"; fi
+[ "$NEED_DOTFILES" = 1 ] && user_plan "dotfiles" "$(change "$DF_CUR" "$DF_LATEST" "copied into ~/.config/nvim, ~/.tmux.conf.local, ...")"
+[ "$RM_OLD" = 1 ] && user_plan "old ~/dotfiles" "removed (no longer used: the config is copied into place)"
 [ "$NEED_OMT" = 1 ]      && user_plan "Oh my tmux!" "new, latest commit"
 if [ -n "$OMT_UPD" ]; then set -- $OMT_UPD; user_plan "Oh my tmux!" "$1 -> $2 ($3 new commits)"; fi
 [ "$NEED_LAZY" = 1 ]     && user_plan "nvim plugins" "new: LazyVim, LSP servers, formatters, parsers (latest)"
@@ -590,7 +661,7 @@ done
 # Claude Code settings this installer manages in ~/.claude/settings.json (only keys that are unset)
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 NEED_CLAUDE_ATTR=0; NEED_GIT_HOOK=0
-GIT_HOOKS="$DOTFILES_DIR/git/hooks"
+GIT_HOOKS="$STATE_DIR/git/hooks"
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   if ! grep -qs '"attribution"' "$CLAUDE_SETTINGS" || ! grep -qs '"sessionUrl"' "$CLAUDE_SETTINGS"; then
     NEED_CLAUDE_ATTR=1
@@ -599,7 +670,7 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
   # Second layer: a global commit-msg hook strips those lines from any commit, and runs each
   # repository's own hooks too. Only when no other global hooks path is set.
   v="$(git config --global core.hooksPath 2>/dev/null || true)"
-  if [ -z "$v" ]; then
+  if [ -z "$v" ] || [ "$v" = "$OLD_DOTFILES/git/hooks" ]; then
     NEED_GIT_HOOK=1
     user_plan "git commit-msg hook" "remove Claude co-author lines from every commit (git config --global core.hooksPath)"
   elif [ "$v" != "$GIT_HOOKS" ]; then
@@ -674,7 +745,8 @@ fi
 ITERM_PROFILES="$HOME/Library/Application Support/iTerm2/DynamicProfiles"
 ITERM_GUID="3d9b7f2a-6c1e-4b8e-9f2d-5e7a0c1d2b3f"
 NEED_ITERM=0
-if [ "$USE_ITERM" = 1 ] && ! cmp -s "$DOTFILES_DIR/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"; then
+# (an existing profile is compared with the repo's when the files are copied, below)
+if [ "$USE_ITERM" = 1 ] && [ ! -f "$ITERM_PROFILES/dotfiles.json" ]; then
   NEED_ITERM=1
   user_plan "iTerm2 profile" "Catppuccin Mocha, Nerd Font, Option as Alt; set as default, clipboard access on"
 fi
@@ -778,6 +850,61 @@ elif [ "$NEED_OS" = 1 ]; then
   for c in git tar; do has "$c" || die "missing required tool: $c (ask an admin to install it)"; done
   has curl || has wget || die "missing required tool: curl (ask an admin to install it)"
   [ -z "$missing" ] || warn "missing OS packages: $missing (ask an admin to install them; related features will not work)"
+fi
+
+# ---------- Docker (asked at the start) ----------
+if [ "$NEED_DOCKER" = 1 ] && [ "$SUDO_OK" = 1 ]; then
+  log "Installing Docker"
+  docker_ok=0
+  case "$PM" in
+    brew)
+      # the cask was renamed from docker to docker-desktop
+      { HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask docker-desktop || HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask docker; } \
+        > "$TMP/docker.log" 2>&1 && docker_ok=1 ;;
+    apt-get|yum)
+      # shellcheck disable=SC2024 # the log is written as this user, on purpose
+      # Docker's own script; distributions it does not know (e.g. Linux Mint) get the distro's package
+      if fetch https://get.docker.com "$TMP/get-docker.sh" && sudo sh "$TMP/get-docker.sh" > "$TMP/docker.log" 2>&1; then docker_ok=1
+      elif [ "$PM" = apt-get ] && pm_add docker.io >> "$TMP/docker.log" 2>&1; then
+        pm_add docker-compose-v2 >/dev/null 2>&1 || pm_add docker-compose >/dev/null 2>&1 || true; docker_ok=1
+      fi ;;
+    dnf)
+      if [ "$OS_ID" = fedora ]; then
+        # shellcheck disable=SC2024 # the log is written as this user, on purpose
+        fetch https://get.docker.com "$TMP/get-docker.sh" && sudo sh "$TMP/get-docker.sh" > "$TMP/docker.log" 2>&1 && docker_ok=1
+      else # RHEL, Rocky, Alma, CentOS Stream: Docker's CentOS repository
+        { sudo dnf install -y dnf-plugins-core \
+          && sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo \
+          && sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; } \
+          > "$TMP/docker.log" 2>&1 && docker_ok=1
+      fi ;;
+    pacman) pm_add docker docker-compose docker-buildx > "$TMP/docker.log" 2>&1 && docker_ok=1 ;;
+    zypper) pm_add docker docker-compose > "$TMP/docker.log" 2>&1 && docker_ok=1 ;;
+    apk)    pm_add docker docker-cli-compose > "$TMP/docker.log" 2>&1 && docker_ok=1 ;;
+  esac
+  hash -r
+  if [ "$docker_ok" = 1 ]; then
+    v="$(docker --version 2>/dev/null | sed 's/^Docker version //; s/,.*//' || true)"
+    sys_did "Docker${v:+ $v}"
+    # Start it now and at boot (not in containers or WSL without systemd: start dockerd yourself)
+    if [ "$OS" = Linux ]; then
+      if [ -d /run/systemd/system ]; then sudo systemctl enable --now docker >/dev/null 2>&1 || warn "could not start Docker (systemctl status docker)"
+      elif [ "$PM" = apk ] && has rc-update; then { sudo rc-update add docker default && sudo rc-service docker start; } >/dev/null 2>&1 || true
+      else DOCKER_NO_SERVICE=1; fi
+    fi
+  else
+    tail -n 15 "$TMP/docker.log" >&2 || true
+    failed "Docker ($DOCKER_HOW)"
+    NEED_DOCKER_GROUP=0
+  fi
+fi
+if [ "$NEED_DOCKER_GROUP" = 1 ] && [ "$SUDO_OK" = 1 ]; then
+  me="$(id -un)"
+  getent group docker >/dev/null 2>&1 || sudo groupadd docker >/dev/null 2>&1 || true
+  if { has usermod && sudo usermod -aG docker "$me"; } || { has addgroup && sudo addgroup "$me" docker; }; then
+    sys_did "docker group: added $me (log out and back in, or run newgrp docker)"
+    DOCKER_RELOGIN=1
+  else failed "docker group (sudo usermod -aG docker $me)"; fi
 fi
 
 # Debian/Ubuntu ship fd as fdfind
@@ -918,50 +1045,90 @@ fi
 LAZY_LOCK="$DATA_HOME/nvim/lazy-lock.json"
 lock_commits() { [ -f "$1" ] && sed -n 's/^ *"\([^"]*\)": *{.*"commit": *"\([0-9a-f]\{7\}\).*/\1 \2/p' "$1" | LC_ALL=C sort; }
 if [ -f "$LAZY_LOCK" ]; then lock_commits "$LAZY_LOCK" > "$TMP/lock.before" || true
-else lock_commits "$DOTFILES_DIR/nvim/lazy-lock.json" > "$TMP/lock.before" 2>/dev/null || true; fi
+else lock_commits "$OLD_DOTFILES/nvim/lazy-lock.json" > "$TMP/lock.before" 2>/dev/null || true; fi
 
-# ---------- dotfiles ----------
-log "Linking dotfiles"
-if [ "$NEED_DOTFILES" = 0 ]; then
-  # safe.directory: allow running as a different user than the repo owner (e.g. root in a container)
-  dgit() { git -c safe.directory="$DOTFILES_DIR" -C "$DOTFILES_DIR" "$@"; }
-  # nvim/lazy-lock.json used to live in the repo and was rewritten by every plugin update;
-  # it now lives in ~/.local/share/nvim, so drop local changes to the old copy
-  dgit checkout -q -- nvim/lazy-lock.json 2>/dev/null || true
-  if dgit pull -q --ff-only 2>/dev/null; then
-    if [ -n "$DOTFILES_UPD" ]; then set -- $DOTFILES_UPD; did "dotfiles $1 -> $2"; fi
-  elif [ -z "$(dgit status --porcelain --untracked-files=no 2>/dev/null)" ] \
-       && dgit rev-parse -q --verify '@{u}' >/dev/null 2>&1 \
-       && ! dgit cherry '@{u}' HEAD 2>/dev/null | grep -q '^+'; then
-    # Not a fast-forward, but every local commit is already upstream with the same changes
-    # (the upstream history was rewritten) and nothing is modified: move to the upstream
-    old="$(dgit rev-parse --short HEAD)"
-    dgit reset -q --hard '@{u}' && did "dotfiles $old -> $(dgit rev-parse --short HEAD) (upstream history rewritten)"
-  else
-    warn "dotfiles not updated: $DOTFILES_DIR has local changes or commits (git -C $DOTFILES_DIR status)"
-  fi
+# ---------- dotfiles: copy this repo's config into place ----------
+log "Installing the config files"
+if [ -n "$DOTFILES_DIR" ]; then
+  SRC="$DOTFILES_DIR"
 else
-  git clone -q "$DOTFILES_REPO" "$DOTFILES_DIR"
-  did "dotfiles ($DOTFILES_DIR)"
+  SRC="$TMP/dotfiles"
+  git clone -q --depth 1 "$DOTFILES_REPO" "$SRC" || die "could not download $DOTFILES_REPO"
 fi
-
-link() { # back up existing config instead of overwriting it
-  local src="$1" dst="$2"
-  mkdir -p "$(dirname "$dst")"
-  if [ -e "$dst" ] && [ ! -L "$dst" ]; then mv "$dst" "$dst.bak.$(date +%s)"; fi
-  ln -sfn "$src" "$dst"
+SRC_VER="$(git -c safe.directory="$SRC" -C "$SRC" rev-parse HEAD 2>/dev/null || echo unknown)"
+PRISTINE="$STATE_DIR/installed" # what the last install put in place, to tell your own edits apart
+STAMP="$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$STATE_DIR"
+CHANGED=0
+# install_file SRC DST KEY: copy SRC to DST. A DST you edited since the last install (it differs
+# from what was installed) is saved as DST.bak.<time> first.
+install_file() {
+  local src="$1" dst="$2" pris="$PRISTINE/$3"
+  if [ -L "$dst" ]; then rm -f "${dst:?}"   # a link from an older install
+  elif [ -e "$dst" ] && ! cmp -s "$src" "$dst"; then
+    if [ ! -f "$pris" ] || ! cmp -s "$pris" "$dst"; then
+      cp -p "$dst" "$dst.bak.$STAMP"; warn "kept your version of $dst as ${dst##*/}.bak.$STAMP"
+    fi
+  fi
+  if ! cmp -s "$src" "$dst" 2>/dev/null; then
+    mkdir -p "$(dirname "$dst")"; cp "$src" "$dst"; CHANGED=$((CHANGED + 1))
+  fi
+  mkdir -p "$(dirname "$pris")"; cp "$src" "$pris"
 }
-link "$DOTFILES_DIR/nvim" "$HOME/.config/nvim"
+# install_tree SRC_DIR DST_DIR KEY [KEEP...]: copy every file. Files an earlier install put there
+# that are gone from the repo are removed; files of your own are left alone. KEEP: files that are
+# only created, never overwritten (lazyvim.json, which LazyVim itself updates).
+install_tree() {
+  local src="$1" dst="$2" key="$3" f k keep; shift 3
+  if [ -L "$dst" ]; then rm -f "${dst:?}"
+  elif [ -d "$dst" ] && [ ! -d "$PRISTINE/$key" ]; then
+    # a config that did not come from this installer: set it aside
+    mv "$dst" "$dst.bak.$STAMP"; warn "moved your $dst to ${dst##*/}.bak.$STAMP"
+  fi
+  if [ -d "$PRISTINE/$key" ]; then
+    while IFS= read -r f; do
+      f="${f#./}"
+      [ -e "$src/$f" ] && continue
+      if cmp -s "$PRISTINE/$key/$f" "$dst/$f"; then rm -f "${dst:?}/${f:?}"; CHANGED=$((CHANGED + 1)); fi
+      rm -f "${PRISTINE:?}/${key:?}/${f:?}"
+    done < <(cd "$PRISTINE/$key" && find . -type f)
+  fi
+  while IFS= read -r f; do
+    f="${f#./}"; keep=0
+    for k in "$@"; do [ "$f" = "$k" ] && keep=1; done
+    if [ "$keep" = 1 ] && [ -e "$dst/$f" ]; then continue; fi
+    install_file "$src/$f" "$dst/$f" "$key/$f"
+  done < <(cd "$src" && find . -type f | LC_ALL=C sort)
+}
+install_tree "$SRC/nvim" "$CONFIG_HOME/nvim" nvim lazyvim.json
+install_file "$SRC/tmux/tmux.conf.local" "$HOME/.tmux.conf.local" tmux.conf.local
+install_file "$SRC/shell/env.sh" "$STATE_DIR/env.sh" env.sh
+# git hooks: hook.sh plus one relative link per hook name (cp -R keeps them as links)
+rm -rf "${STATE_DIR:?}/git.new"; cp -R "$SRC/git" "$STATE_DIR/git.new"
+rm -rf "${STATE_DIR:?}/git"; mv "$STATE_DIR/git.new" "$STATE_DIR/git"
 if [ "$OS" != Darwin ] || [ "$USE_GHOSTTY" = 1 ]; then
-  link "$DOTFILES_DIR/ghostty/config" "$HOME/.config/ghostty/config"
+  install_file "$SRC/ghostty/config" "$CONFIG_HOME/ghostty/config" ghostty
   # Ghostty on macOS also loads a config in Application Support, after (and over) this one: move it aside
   for f in "$HOME/Library/Application Support/com.mitchellh.ghostty/config" \
            "$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty"; do
     if [ -s "$f" ] && [ ! -L "$f" ]; then
-      mv "$f" "$f.bak.$(date +%s)" && did "Ghostty: moved your old config aside (${f##*/}.bak.*), ~/.config/ghostty/config is used now"
+      mv "$f" "$f.bak.$STAMP" && did "Ghostty: moved your old config aside (${f##*/}.bak.$STAMP), ~/.config/ghostty/config is used now"
     fi
   done
 fi
+if [ "$USE_ITERM" = 1 ] && ! cmp -s "$SRC/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"; then NEED_ITERM=1; fi
+if [ "$DF_CUR" != "${SRC_VER:0:7}" ] || [ "$CHANGED" -gt 0 ]; then
+  if [ -n "$DF_CUR" ]; then did "dotfiles $DF_CUR -> ${SRC_VER:0:7} ($CHANGED files changed)"
+  else did "dotfiles ${SRC_VER:0:7} (in ~/.config/nvim, ~/.tmux.conf.local, ~/.config/dotfiles)"; fi
+fi
+printf '%s\n' "$SRC_VER" > "$STATE_DIR/version"
+
+link() { # link SRC DST: a symlink; an existing file is set aside first
+  local src="$1" dst="$2"
+  mkdir -p "$(dirname "$dst")"
+  if [ -e "$dst" ] && [ ! -L "$dst" ]; then mv "$dst" "$dst.bak.$STAMP"; fi
+  ln -sfn "$src" "$dst"
+}
 
 # tmux: Oh my tmux! (https://github.com/gpakosz/.tmux) plus this repo's tmux/tmux.conf.local
 if [ "$NEED_OMT" = 0 ]; then
@@ -973,19 +1140,24 @@ else
   did "Oh my tmux! $(git -C "$OH_MY_TMUX" rev-parse --short HEAD)"
 fi
 link "$OH_MY_TMUX/.tmux.conf" "$HOME/.tmux.conf"
-link "$DOTFILES_DIR/tmux/tmux.conf.local" "$HOME/.tmux.conf.local"
 
-# Load shell/env.sh (PATH for ~/.local/bin and Mason) from the shell rc files, once
-SOURCE_LINE="[ -f \"$DOTFILES_DIR/shell/env.sh\" ] && . \"$DOTFILES_DIR/shell/env.sh\" # dotfiles"
+# Load env.sh (PATH for ~/.local/bin and Mason, sshk, ...) from the shell rc files, once.
+# The line older installs added (pointing into ~/dotfiles) is replaced.
+SOURCE_LINE="[ -f \"$STATE_DIR/env.sh\" ] && . \"$STATE_DIR/env.sh\" # dotfiles"
 for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
   # Always use ~/.bashrc; use ~/.zshrc when it exists, or on macOS where zsh is the default shell
   case "$rc" in
     */.zshrc) [ -f "$rc" ] || [ "$OS" = Darwin ] || continue ;;
   esac
-  grep -qsF "$DOTFILES_DIR/shell/env.sh" "$rc" || printf '\n%s\n' "$SOURCE_LINE" >> "$rc"
+  if grep -qs '/shell/env.sh" # dotfiles$' "$rc"; then
+    # rewritten with cat >, so an rc file that is a link stays a link
+    grep -v '/shell/env.sh" # dotfiles$' "$rc" > "$TMP/rc" || true
+    cat "$TMP/rc" > "$rc"
+  fi
+  grep -qsF "$SOURCE_LINE" "$rc" || printf '\n%s\n' "$SOURCE_LINE" >> "$rc"
 done
 # shellcheck source=shell/env.sh
-. "$DOTFILES_DIR/shell/env.sh"
+. "$STATE_DIR/env.sh"
 
 # ---------- nvim plugins, LSP servers, treesitter parsers (all headless) ----------
 # Everything is installed when missing and updated to the latest; each step is time-bounded.
@@ -1063,7 +1235,7 @@ if [ "$NEED_ITERM" = 1 ]; then
   log "Setting up the iTerm2 profile"
   mkdir -p "$ITERM_PROFILES"
   # A copy, not a link: iTerm2 reads the folder at start and when files in it change
-  cp "$DOTFILES_DIR/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"
+  cp "$SRC/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"
   # Default profile for new windows, and let programs (tmux, nvim over SSH) set the clipboard.
   # iTerm2 saves its settings when it quits, so these apply after iTerm2 restarts.
   defaults write com.googlecode.iterm2 "Default Bookmark Guid" -string "$ITERM_GUID"
@@ -1117,7 +1289,7 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
     log "Installing Claude Code ${CLAUDE_LATEST:-latest}"
     fetch https://claude.ai/install.sh "$TMP/claude-install.sh"
     bash "$TMP/claude-install.sh"
-    . "$DOTFILES_DIR/shell/env.sh"; hash -r
+    . "$STATE_DIR/env.sh"; hash -r
     has claude && did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}')"
   fi
   if has claude; then
@@ -1162,6 +1334,14 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
   fi
 fi
 
+# ---------- The old ~/dotfiles clone (nothing points into it any more) ----------
+if [ "$RM_OLD" = 1 ]; then
+  if [ "$(git config --global core.hooksPath 2>/dev/null || true)" = "$OLD_DOTFILES/git/hooks" ]; then
+    git config --global core.hooksPath "$GIT_HOOKS"
+  fi
+  rm -rf "${HOME:?}/dotfiles" && did "removed the old ~/dotfiles (no longer used)"
+fi
+
 # ---------- Summary ----------
 if [ ${#SYS_DONE[@]} -gt 0 ] || [ ${#DONE[@]} -gt 0 ]; then
   log "Installed:"
@@ -1181,6 +1361,9 @@ fi
 # ---------- Next steps (printed on every run, so nothing is forgotten) ----------
 log "Done. Next steps:"
 echo "   - Open a new shell, then run nvim and tmux (:checkhealth and :Mason show the details)"
+[ "${DOCKER_RELOGIN:-0}" = 1 ] && echo "   - Docker: log out and back in (or run: newgrp docker), then docker runs without sudo"
+[ "${DOCKER_NO_SERVICE:-0}" = 1 ] && echo "   - Docker: no systemd here, so the daemon was not started (run: sudo dockerd &)"
+[ "$NEED_DOCKER" = 1 ] && [ "$PM" = brew ] && echo "   - Docker: open Docker Desktop once (Applications) to finish its setup"
 if [ "$INSTALL_CLAUDE" = 1 ] && has claude; then
   [ "$NEED_CLAUDE" = 1 ] && [ -z "$CLAUDE_CUR" ] && echo "   - Run claude (or tmux prefix + A) and log in"
   # MCP servers (plugin tools, claude.ai connectors) that still need a sign-in. `claude mcp list`
