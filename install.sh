@@ -87,7 +87,7 @@ spin_start() {
   [ "$UI" = 1 ] || return 0
   local label="$1" t0="$SECONDS"
   (
-    trap 'exit 0' TERM
+    trap - INT TERM; exec 2>/dev/null
     i=0; nf=${#SPIN_FRAMES[@]}
     while :; do
       d="$(tail -n 1 "$INSTALL_LOG" 2>/dev/null | tr -d '\r' | sed "s/${ESC}\[[0-9;?]*[A-Za-z]//g; /^==> /d; /^!! /d" || true)"
@@ -626,6 +626,19 @@ timeout_cmd() { with_timeout "$@" </dev/null; }
 # The network lookups run in parallel in the background; each writes its answer to a file and
 # is reported as it finishes, so a slow one does not hold up the others.
 TMP="$(mktemp -d)"
+# Everything here is downloaded over HTTPS. A git setting that rewrites https://github.com/ to SSH
+# (url.<base>.insteadOf) would send lazy.nvim's dozens of parallel clones over SSH, and GitHub
+# resets most of them ("kex_exchange_identification: Connection reset"). So git, and what runs it
+# (nvim, claude), reads a copy of your global git config without those rewrites. Your own git
+# config is not changed; commands that write to it use gitg.
+gitg() { env -u GIT_CONFIG_GLOBAL git "$@"; }
+if has git && git config --global --includes --get-regexp '^url\..*\.insteadof$' >/dev/null 2>&1; then
+  : > "$TMP/gitconfig"
+  git config --global --includes --list 2>/dev/null | grep -iv '^url\.' | while IFS= read -r kv; do
+    git config -f "$TMP/gitconfig" --add "${kv%%=*}" "${kv#*=}" 2>/dev/null || true
+  done
+  export GIT_CONFIG_GLOBAL="$TMP/gitconfig"
+fi
 trap 'spin_stop; printf "%s[?25h" "$ESC" >&3; rm -rf "$TMP"' EXIT
 LOOKUP="$TMP/lookup"; mkdir -p "$LOOKUP"
 L_PIDS=(); L_NAMES=(); L_LABELS=()
@@ -882,7 +895,7 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
   fi
   # Second layer: a global commit-msg hook strips those lines from any commit, and runs each
   # repository's own hooks too. Only when no other global hooks path is set.
-  v="$(git config --global core.hooksPath 2>/dev/null || true)"
+  v="$(gitg config --global core.hooksPath 2>/dev/null || true)"
   if [ -z "$v" ] || [ "$v" = "$OLD_DOTFILES/git/hooks" ]; then
     NEED_GIT_HOOK=1
     user_plan "git commit-msg hook" "remove Claude co-author lines from every commit (git config --global core.hooksPath)"
@@ -1037,7 +1050,6 @@ pm_add() { # pm_add PACKAGE...
   esac
 }
 if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
-  step "Installing OS packages"
   if [ "$NEED_BREW" = 1 ]; then
     step "Installing Homebrew"
     fetch https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh "$TMP/brew-install.sh"
@@ -1047,13 +1059,13 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   fi
   # Refresh the package index (does not upgrade anything)
   if [ "$INDEX_FRESH" = 0 ]; then
+    step "Updating the package index"
     case "$PM" in
       apt-get) sudo apt-get update || true ;;
       pacman)  sudo pacman -Sy --noconfirm ;;
       zypper)  sudo zypper --non-interactive refresh || true ;;
       apk)     sudo apk update ;;
       brew)    # quietly: its own output lists every new formula (hundreds of lines)
-               step "Updating Homebrew (brew update)"
                brew update --quiet >/dev/null 2>&1 || warn "brew update failed, installing with the current package list" ;;
     esac
   fi
@@ -1063,6 +1075,7 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
     xcodebuild -license check >/dev/null 2>&1 \
       || die "accept the Xcode license first: sudo xcodebuild -license accept   (then run this again)"
   fi
+  step "Installing OS packages"
   if [ ${#MISS_REQ[@]} -gt 0 ]; then
     if ! pm_add "${MISS_REQ[@]}"; then
       [ "$IS_TERMUX" = 1 ] && warn "Termux could not download packages: run termux-change-repo, pick another mirror, then run this again"
@@ -1402,6 +1415,15 @@ step "Installing and updating nvim plugins (LazyVim, up to a minute)"
 # Lazy's per-plugin progress goes to a log (shown only on failure); the summary lists the
 # plugins whose commit changed (lockfile before vs after)
 if with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! sync" +qa </dev/null > "$TMP/lazy.log" 2>&1; then
+  tr -d '\r' < "$TMP/lazy.log" >> "$INSTALL_LOG" || true
+  # Lazy exits 0 even when downloads failed: ask it which plugins are still not installed
+  missing="$(with_timeout 60 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless \
+    -c 'lua for _, p in ipairs(require("lazy").plugins()) do if not p._.installed then io.stdout:write(p.name .. " ") end end' \
+    -c qa </dev/null 2>/dev/null || true)"
+  missing="$(echo $missing)"
+  if [ -n "$missing" ]; then
+    failed "nvim plugins not downloaded: $missing (run :Lazy sync; the log has git's error)"
+  fi
   lock_commits "$LAZY_LOCK" > "$TMP/lock.after" || true
   n="$(wc -l < "$TMP/lock.after" | tr -d ' ')"
   m=0; [ -s "$TMP/lock.before" ] && m="$(LC_ALL=C join "$TMP/lock.before" "$TMP/lock.after" 2>/dev/null | awk '$2 != $3' | wc -l | tr -d ' ' || echo 0)"
@@ -1412,7 +1434,8 @@ if with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! sync
     while IFS= read -r l; do did "$l"; done < "$TMP/plugins.done"
   fi
 else
-  tail -n 20 "$TMP/lazy.log" | tr -d '\r' >&2
+  tr -d '\r' < "$TMP/lazy.log" >> "$INSTALL_LOG" || true
+  [ "$UI" = 1 ] || tail -n 20 "$TMP/lazy.log" | tr -d '\r' >&2
   failed "nvim plugins (Lazy sync failed or timed out, run :Lazy sync)"
 fi
 
@@ -1513,7 +1536,7 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
     fi
   fi
   if [ "$NEED_GIT_HOOK" = 1 ]; then
-    if git config --global core.hooksPath "$GIT_HOOKS"; then did "git commit-msg hook (core.hooksPath $GIT_HOOKS)"
+    if gitg config --global core.hooksPath "$GIT_HOOKS"; then did "git commit-msg hook (core.hooksPath $GIT_HOOKS)"
     else failed "git commit-msg hook"; fi
   fi
   # Native installer: updates itself in the background, so it is only run when claude is missing
@@ -1573,8 +1596,8 @@ fi
 
 # ---------- The old ~/dotfiles clone (nothing points into it any more) ----------
 if [ "$RM_OLD" = 1 ]; then
-  if [ "$(git config --global core.hooksPath 2>/dev/null || true)" = "$OLD_DOTFILES/git/hooks" ]; then
-    git config --global core.hooksPath "$GIT_HOOKS"
+  if [ "$(gitg config --global core.hooksPath 2>/dev/null || true)" = "$OLD_DOTFILES/git/hooks" ]; then
+    gitg config --global core.hooksPath "$GIT_HOOKS"
   fi
   rm -rf "${HOME:?}/dotfiles" && did "removed the old ~/dotfiles (no longer used)"
 fi
