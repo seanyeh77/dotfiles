@@ -26,18 +26,19 @@ if [ -n "${ZSH_VERSION:-}" ] && [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] \
   . "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"
 fi
 
-# ssh through trzsz (on your own computer, not inside an ssh session): on the server, `tsz FILE`
-# saves FILE on this computer (~/Downloads, set in ~/.trzsz.conf) and `trz` uploads, also inside
-# tmux. Ghostty's terminal type is replaced by xterm-256color, which every server knows.
-# `command ssh` is the plain one. Without a terminal (scripts, pipes) it is plain ssh too.
+# ssh on your own computer (not inside an ssh session) runs tssh: an ssh client that reads
+# ~/.ssh/config like ssh, with file transfer built in (on the server: `tsz FILE` saves FILE in
+# ~/Downloads here, `trz` uploads, also inside tmux), a host menu (`ssh` alone) and, for hosts
+# with `#!! UdpMode yes`, sessions that survive sleep and network changes. Ghostty's terminal type
+# is replaced by xterm-256color, which every server knows. `command ssh` is the plain one, and so
+# is ssh without a terminal (scripts, pipes).
 dotfiles_ssh() {
-  if [ -t 0 ] && [ -t 1 ] && command -v trzsz >/dev/null 2>&1; then
-    if [ "${TERM:-}" = xterm-ghostty ]; then TERM=xterm-256color trzsz ssh "$@"; else trzsz ssh "$@"; fi
-  else
-    command ssh "$@"
-  fi
+  _t="${TERM:-}"; [ "$_t" = xterm-ghostty ] && _t=xterm-256color
+  if [ -t 0 ] && [ -t 1 ] && command -v tssh >/dev/null 2>&1; then TERM="$_t" tssh "$@"
+  elif [ -t 0 ] && [ -t 1 ] && command -v trzsz >/dev/null 2>&1; then TERM="$_t" trzsz ssh "$@"
+  else TERM="$_t" command ssh "$@"; fi
 }
-if [ -z "${SSH_CONNECTION:-}" ] && command -v trzsz >/dev/null 2>&1; then
+if [ -z "${SSH_CONNECTION:-}" ] && { command -v tssh >/dev/null 2>&1 || command -v trzsz >/dev/null 2>&1; }; then
   alias ssh=dotfiles_ssh
 fi
 

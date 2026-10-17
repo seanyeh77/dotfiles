@@ -486,7 +486,7 @@ export GIT_TERMINAL_PROMPT=0
 # Python is not here: each user gets their own from uv (below).
 case "$PM" in
   brew)    OS_REQ=(git tmux ripgrep:rg fd neovim:nvim node)
-           OS_OPT=(tree-sitter-cli:tree-sitter lazygit trzsz-go:trzsz) ;;
+           OS_OPT=(tree-sitter-cli:tree-sitter lazygit trzsz-go:trzsz trzsz-ssh:tssh tsshd) ;;
   apt-get) OS_REQ=(git curl unzip tar gzip xz-utils:xz findutils:find tmux ripgrep:rg build-essential)
            if [ "$IS_TERMUX" = 1 ]; then
              # Termux: Neovim, Node.js, tree-sitter, uv and Python come from its packages too
@@ -674,7 +674,11 @@ lk_dotfiles() { # the commit this install would use
   elif has git; then timeout_cmd 30 git ls-remote "$DOTFILES_REPO" HEAD 2>/dev/null | awk '{print $1}'; fi
 }
 lookup dotfiles "dotfiles" lk_dotfiles
-[ "$PM" != brew ] && lookup trzsz "trzsz" gh_latest trzsz/trzsz-go
+if [ "$PM" != brew ]; then
+  lookup tz_trzsz "trzsz" gh_latest trzsz/trzsz-go
+  lookup tz_tssh "tssh" gh_latest trzsz/trzsz-ssh
+  [ "$IS_TERMUX" = 1 ] || lookup tz_tsshd "tsshd" gh_latest trzsz/tsshd
+fi
 [ -d "$OH_MY_TMUX/.git" ] && lookup omt "Oh my tmux!" git_update "$OH_MY_TMUX"
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   lookup claude "Claude Code" lk_claude
@@ -735,18 +739,32 @@ UV_CUR=""; [ -x "$LOCAL_BIN/uv" ] && UV_CUR="$("$LOCAL_BIN/uv" --version 2>/dev/
 UV_LATEST="$(lookup_result uv)"
 NEED_UV=0; outdated "$UV_CUR" "$UV_LATEST" && NEED_UV=1
 [ "$IS_TERMUX" = 1 ] && NEED_UV=0 # from Termux's packages
-# trzsz (trz / tsz): file transfer over the ssh session itself. `tsz FILE` on a server saves the
-# file on your computer, `trz` uploads; it works inside tmux. Static binaries in ~/.local/bin on
-# Linux, Alpine and Termux (Android build); Homebrew's trzsz-go on macOS (OS_OPT).
-TZ_CUR=""; TZ_LATEST=""; NEED_TZ=0
-if [ "$PM" != brew ]; then
-  if [ -x "$LOCAL_BIN/tsz" ]; then
-    v="$("$LOCAL_BIN/tsz" --version 2>&1 || true)"
-    TZ_CUR="$(printf '%s\n' "$v" | awk 'match($0, /[0-9]+\.[0-9]+\.[0-9]+/) {print "v" substr($0, RSTART, RLENGTH); exit}')"
+# trzsz family (https://trzsz.github.io): static binaries in ~/.local/bin on Linux, Alpine and
+# Termux (Android builds); Homebrew on macOS (OS_OPT).
+#   trzsz  trz / tsz: upload / download files over the ssh session itself, also inside tmux
+#   tssh   an ssh client with trzsz built in, reads ~/.ssh/config; `ssh` runs it on your computer
+#   tsshd  the server side of `tssh --udp`: sessions survive sleep and network changes (like mosh)
+# name|GitHub repo|archive name|binaries
+TZ_TOOLS=("trzsz|trzsz/trzsz-go|trzsz|trz tsz trzsz" "tssh|trzsz/trzsz-ssh|tssh|tssh" "tsshd|trzsz/tsshd|tsshd|tsshd")
+TZ_CUR=(); TZ_LATEST=(); TZ_NEED=()
+for i in "${!TZ_TOOLS[@]}"; do
+  IFS='|' read -r nm _ _ bins <<< "${TZ_TOOLS[$i]}"
+  TZ_CUR[$i]=""; TZ_LATEST[$i]=""; TZ_NEED[$i]=0
+  [ "$PM" != brew ] || continue
+  [ "$nm" = tsshd ] && [ "$IS_TERMUX" = 1 ] && continue # no Android build
+  b="${bins##* }"
+  if [ -x "$LOCAL_BIN/$b" ]; then
+    v="$("$LOCAL_BIN/$b" --version 2>&1 || true)"
+    TZ_CUR[$i]="$(printf '%s\n' "$v" | awk 'match($0, /[0-9]+\.[0-9]+\.[0-9]+/) {print "v" substr($0, RSTART, RLENGTH); exit}')"
   fi
-  TZ_LATEST="$(lookup_result trzsz)"
-  outdated "$TZ_CUR" "$TZ_LATEST" && NEED_TZ=1
-fi
+  TZ_LATEST[$i]="$(lookup_result "tz_$nm")"
+  outdated "${TZ_CUR[$i]}" "${TZ_LATEST[$i]}" && TZ_NEED[$i]=1
+done
+# tssh starts tsshd on the server over a plain ssh command, where ~/.local/bin is usually not on
+# PATH: a Host * block at the end of ~/.ssh/config points it there (#!! lines are comments to ssh)
+SSH_CFG="$HOME/.ssh/config"
+NEED_SSHCFG=0
+if [ "$IS_TERMUX" = 0 ] && ! grep -qs 'TsshdPath' "$SSH_CFG"; then NEED_SSHCFG=1; fi
 # lazygit (git UI, Space g g in nvim): a static binary in ~/.local/bin on Linux; macOS, Alpine and
 # Termux take it from their package manager (OS_OPT)
 LG_CUR=""; LG_LATEST=""; NEED_LG=0
@@ -893,7 +911,16 @@ fi
 [ "$NEED_TS" = 1 ]       && user_plan "tree-sitter CLI" "$(change "$TS_CUR" "$TS_LATEST" "~/.local/opt/tree-sitter-cli")"
 [ "$NEED_UV" = 1 ]       && user_plan "uv" "$(change "$UV_CUR" "$UV_LATEST" "~/.local/bin")"
 [ "$NEED_LG" = 1 ]       && user_plan "lazygit" "$(change "$LG_CUR" "$LG_LATEST" "~/.local/bin")"
-[ "$NEED_TZ" = 1 ]       && user_plan "trzsz" "$(change "$TZ_CUR" "$TZ_LATEST" "~/.local/bin (tsz / trz: download / upload over ssh)")"
+for i in "${!TZ_TOOLS[@]}"; do
+  [ "${TZ_NEED[$i]}" = 1 ] || continue
+  case "${TZ_TOOLS[$i]%%|*}" in
+    trzsz) w="tsz / trz: download / upload over ssh" ;;
+    tssh)  w="ssh with file transfer, host menu" ;;
+    tsshd) w="server side of tssh --udp: sessions survive sleep" ;;
+  esac
+  user_plan "${TZ_TOOLS[$i]%%|*}" "$(change "${TZ_CUR[$i]}" "${TZ_LATEST[$i]}" "~/.local/bin ($w)")"
+done
+[ "$NEED_SSHCFG" = 1 ] && user_plan "~/.ssh/config" "a Host * block at the end: TsshdPath ~/.local/bin/tsshd (for tssh --udp)"
 [ "$NEED_PY" = 1 ]       && user_plan "Python" "$(change "$PY_CUR" "$PY_LATEST" "with uv, python3 in ~/.local/bin")"
 [ "$NEED_DOTFILES" = 1 ] && user_plan "dotfiles" "$(change "$DF_CUR" "$DF_LATEST" "copied into ~/.config/nvim, ~/.tmux.conf.local, ...")"
 [ "$RM_OLD" = 1 ] && user_plan "old ~/dotfiles" "removed (no longer used: the config is copied into place)"
@@ -1266,31 +1293,52 @@ if [ -e "$MASON_DIR/bin/tree-sitter" ] && ! "$MASON_DIR/bin/tree-sitter" --versi
   rm -rf "$MASON_DIR/packages/tree-sitter-cli" "$MASON_DIR/bin/tree-sitter"
 fi
 
-# ---------- trzsz (per user, Linux / Termux) ----------
-if [ "$NEED_TZ" = 1 ] && [ -z "$TZ_LATEST" ]; then TZ_LATEST="$(gh_latest trzsz/trzsz-go)"; fi
-if [ "$NEED_TZ" = 1 ]; then
-  if [ -z "$TZ_LATEST" ]; then
-    step "Installing trzsz"
-    failed "trzsz (could not look up the latest release)"
+# ---------- trzsz, tssh, tsshd (per user, Linux / Termux) ----------
+case "$ARCH" in amd64) a=x86_64 ;; arm64) a=aarch64 ;; esac
+o=linux; [ "$IS_TERMUX" = 1 ] && o=android
+for i in "${!TZ_TOOLS[@]}"; do
+  [ "${TZ_NEED[$i]}" = 1 ] || continue
+  IFS='|' read -r nm repo proj bins <<< "${TZ_TOOLS[$i]}"
+  ver="${TZ_LATEST[$i]}"; [ -n "$ver" ] || ver="$(gh_latest "$repo")" # the lookup may have failed
+  if [ -z "$ver" ]; then
+    step "Installing $nm"
+    failed "$nm (could not look up the latest release)"
+    continue
+  fi
+  step "Installing $nm $ver in ~/.local/bin"
+  d="${proj}_${ver#v}_${o}_$a"
+  b="${bins##* }"
+  if fetch_once "https://github.com/$repo/releases/download/$ver/$d.tar.gz" "$TMP/$proj.tgz" \
+     && tar -C "$TMP" -xzf "$TMP/$proj.tgz" && [ -x "$TMP/$d/$b" ]; then
+    for x in $bins; do [ -f "$TMP/$d/$x" ] && mv -f "$TMP/$d/$x" "$LOCAL_BIN/$x"; done
+    if [ -n "${TZ_CUR[$i]}" ]; then did "$nm $ver (was ${TZ_CUR[$i]})"; else did "$nm $ver"; fi
   else
-    step "Installing trzsz $TZ_LATEST in ~/.local/bin"
-    case "$ARCH" in amd64) a=x86_64 ;; arm64) a=aarch64 ;; esac
-    o=linux; [ "$IS_TERMUX" = 1 ] && o=android
-    d="trzsz_${TZ_LATEST#v}_${o}_$a"
-    if fetch_once "https://github.com/trzsz/trzsz-go/releases/download/$TZ_LATEST/$d.tar.gz" "$TMP/trzsz.tgz" \
-       && tar -C "$TMP" -xzf "$TMP/trzsz.tgz" && [ -x "$TMP/$d/tsz" ]; then
-      for b in trz tsz trzsz; do [ -f "$TMP/$d/$b" ] && mv -f "$TMP/$d/$b" "$LOCAL_BIN/$b"; done
-      if [ -n "$TZ_CUR" ]; then did "trzsz $TZ_LATEST (was $TZ_CUR)"; else did "trzsz $TZ_LATEST (tsz FILE downloads, trz uploads)"; fi
-    else
-      failed "trzsz"
-    fi
+    failed "$nm"
+  fi
+done
+# Downloads (tsz) go straight to ~/Downloads, no dialog each time. Your own files are kept.
+if [ "$OS" = Darwin ] || [ -d "$HOME/Downloads" ]; then
+  if [ ! -e "$HOME/.trzsz.conf" ]; then # used by `trzsz ssh`
+    mkdir -p "$HOME/Downloads"
+    printf 'DefaultDownloadPath = %s/Downloads/\n' "$HOME" > "$HOME/.trzsz.conf"
+  fi
+  # ~/.tssh.conf: read whether or not XDG_CONFIG_HOME is set (often it is not, e.g. on macOS)
+  if [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/tssh/tssh.conf" ] && [ ! -e "$HOME/.tssh.conf" ]; then
+    mkdir -p "$HOME/Downloads"
+    printf '%s\n' "# tssh settings (https://github.com/trzsz/trzsz-ssh#custom-configuration)" \
+      "# tsz saves here without asking" "DefaultDownloadPath = ~/Downloads" \
+      "# read ~/.ssh/config through ssh -G, so Match blocks work too" "UseOpenSSHConfig = yes" \
+      > "$HOME/.tssh.conf"
+    did "tssh settings (~/.tssh.conf): tsz saves into ~/Downloads"
   fi
 fi
-# Where downloads go: straight to ~/Downloads, no dialog each time (~/.trzsz.conf, kept if you have one)
-if [ ! -e "$HOME/.trzsz.conf" ] && { [ "$OS" = Darwin ] || [ -d "$HOME/Downloads" ]; }; then
-  mkdir -p "$HOME/Downloads"
-  printf 'DefaultDownloadPath = %s/Downloads/\n' "$HOME" > "$HOME/.trzsz.conf"
-  did "~/.trzsz.conf: tsz saves into ~/Downloads"
+if [ "$NEED_SSHCFG" = 1 ]; then
+  mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
+  [ -f "$SSH_CFG" ] || { : > "$SSH_CFG"; chmod 600 "$SSH_CFG"; }
+  printf '%s\n' "" "# dotfiles: where tssh finds tsshd on a server (it installs it in ~/.local/bin)." \
+    "# Lines starting with #!! are read by tssh only; ssh ignores them." \
+    "Host *" "  #!! TsshdPath ~/.local/bin/tsshd" >> "$SSH_CFG"
+  did "~/.ssh/config: TsshdPath ~/.local/bin/tsshd (Host * at the end)"
 fi
 
 # ---------- lazygit (per user, Linux) ----------

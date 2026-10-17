@@ -96,16 +96,43 @@ The prefix is `Ctrl-a`.
 | `C-a [` | Copy mode: `v` to select, `y` to copy |
 | `C-a A` | Open Claude Code, connected to the nvim in the same folder |
 
-## Files over SSH
+## SSH
 
-[trzsz](https://github.com/trzsz/trzsz-go) is installed on every machine, and on your own computer `ssh` runs through it. On a server, also inside tmux:
+Every machine gets [trzsz](https://github.com/trzsz/trzsz-go) (`trz` / `tsz`), [tssh](https://github.com/trzsz/trzsz-ssh) and [tsshd](https://github.com/trzsz/tsshd). On your own computer, `ssh` runs `tssh`: it reads `~/.ssh/config` like ssh does and adds the features below. Inside an ssh session, and in scripts, `ssh` stays the plain one; `command ssh` is always the plain one.
+
+### Move files
+
+Logged in to a server with `ssh`, also inside tmux:
 
 | Command | Action |
 | --- | --- |
-| `tsz FILE...` | Download to your computer's `~/Downloads` (set in `~/.trzsz.conf`) |
+| `tsz FILE...` | Download to your computer's `~/Downloads` (set in `~/.tssh.conf`) |
+| `tsz -d DIR` | Download a whole folder |
 | `trz` | Upload: pick files on your computer, they land in the current folder |
 
-The server needs `trz` / `tsz` too: this installer puts them there, or `pip install trzsz`. `command ssh` is the plain ssh.
+The server needs `trz` / `tsz`: this installer puts them there, or run `tssh --install-trzsz HOST` from your computer.
+
+### Pick a host
+
+`ssh` on its own opens a menu of the hosts in `~/.ssh/config`: type to search, `Enter` to log in. In tmux, `Space` selects several hosts, then `p` logs in to each in its own pane (`w`: windows).
+
+### Keep sessions alive (UDP mode)
+
+For a server you run yourself, the session can survive your laptop sleeping, a Wi-Fi change or a VPN reconnect, like mosh:
+
+1. The server needs `tsshd` (this installer puts it in `~/.local/bin`, or run `tssh --install-tsshd HOST`) and UDP ports 61001-61999 open, e.g. `sudo ufw allow 61001:61999/udp`.
+2. Add `#!! UdpMode yes` to that host in `~/.ssh/config` (ssh ignores `#!!` lines):
+
+   ```
+   Host myvm
+     HostName 10.1.253.116
+     User seanyeh77
+     #!! UdpMode yes
+   ```
+
+3. `ssh myvm` as usual. After a network break it reconnects by itself; `Ctrl-D` while it waits gives up.
+
+Leave it off for servers whose firewall you cannot change (school or competition clusters): there `ssh` works as usual over TCP. The installer adds one `Host *` line at the end of `~/.ssh/config` so tssh finds `tsshd` in `~/.local/bin` on the server.
 
 ## Shell
 
