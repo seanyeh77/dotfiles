@@ -10,12 +10,17 @@ Neovim ([LazyVim](https://www.lazyvim.org)) and tmux ([Oh my tmux!](https://gith
 curl -fsSL seanyeh77.github.io/dotfiles | bash
 ```
 
-It first shows a plan with versions and asks once. Run it again to update.
+1. **Choose**: a checklist of the optional parts (Claude Code and its plugins, Docker, terminal setup, Nerd Font). `↑↓` move, `Space` toggles, `Enter` continues. Your choices are remembered.
+2. **Plan**: what will be installed or updated, with versions, split into system changes (sudo) and your own `~`. One key press to confirm.
+3. **Install**: one line per step with a spinner; the commands' output goes to `~/.local/state/dotfiles/install.log`.
+4. **Summary**: what changed, what failed and why, and the next steps.
+
+Run it again to update. Without a terminal (CI, `> file`) it prints plain lines with all the output instead.
 
 No copy of this repo stays behind: the files are copied into place (`~/.config/nvim`, `~/.tmux.conf.local`, `~/.config/ghostty/config`, and `~/.config/dotfiles` for the shell setup and git hooks), and the download is deleted. On an update, a file you edited is saved as `<name>.bak.<time>` before it is replaced, and files you added are left alone. The `~/dotfiles` folder of older versions is removed (kept if it has changes of yours).
 
 - **System** (sudo, every user): only missing OS packages such as git, tmux, compilers and ripgrep; installed ones are never upgraded. Without sudo rights this step is skipped.
-- **Docker** (asked, default no): Docker Desktop on macOS, Docker Engine with Compose on Linux, and you are added to the `docker` group so it runs without sudo (log in again first). Only offered when you have sudo; if Docker is already there, only the group is offered.
+- **Docker** (optional, off by default): Docker Desktop on macOS, Docker Engine with Compose on Linux, and you are added to the `docker` group so it runs without sudo (log in again first). Only offered when you have sudo; if Docker is already there, only the group is offered.
 - **Only you** (`~`, no sudo): Neovim, Node.js LTS, tree-sitter, [uv](https://docs.astral.sh/uv/), Python, lazygit, nvim plugins, LSP servers and Claude Code, kept at the latest release.
 - **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine, WSL and Termux, on amd64 or arm64.
 
@@ -29,7 +34,7 @@ No copy of this repo stays behind: the files are copied into place (`~/.config/n
 
 ## Claude Code
 
-The installer asks whether to install it and which plugins to add (Enter for all), and remembers the answers.
+Pick it and its plugins in the checklist (all on by default).
 
 - Workflow: commit-commands, code-review, feature-dev, security-guidance, code-simplifier, claude-md-management, superpowers, context7
 - Frontend: frontend-design, playwright, design, vercel-react-best-practices
@@ -43,14 +48,14 @@ Set them before `bash`, e.g. `curl -fsSL seanyeh77.github.io/dotfiles | DOTFILES
 
 | Variable | Effect |
 | --- | --- |
-| `DOTFILES_ASK=1` | Ask the questions again (Claude Code, Docker) |
-| `INSTALL_CLAUDE=1\|0`, `CLAUDE_PLUGINS="a b"`, `INSTALL_DOCKER=1\|0` | Answer them up front |
+| `DOTFILES_ASK=1` | Show the checklist again |
+| `INSTALL_CLAUDE`, `CLAUDE_PLUGINS="a b"`, `INSTALL_DOCKER`, `SETUP_TERMINAL`, `INSTALL_FONT` | Preset the choices (`1` or `0`) |
 | `ASSUME_YES=1` | Do not ask before installing |
+| `DOTFILES_PLAIN=1` | No spinner: every command's output on screen |
 | `NO_SUDO=1` / `USE_SUDO=1` | Never use sudo / ask for the sudo password even if you are not in an admin group |
 | `PYTHON_VERSION=3.13` | Pin Python instead of the latest |
 | `DOTFILES_TERMINAL=iterm2\|ghostty\|none` | Set up only that terminal (`ghostty` installs it if missing) |
 | `NO_ITERM=1` / `NO_GHOSTTY=1` | Skip one terminal |
-| `DOTFILES_FONT=1\|0` | Install the Nerd Font or not |
 | `DOTFILES_DIR=PATH` | Install from this checkout instead of downloading the repo (the checkout is kept) |
 
 ## Neovim

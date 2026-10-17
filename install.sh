@@ -48,10 +48,110 @@ CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 STATE_DIR="$CONFIG_HOME/dotfiles"   # env.sh, git hooks, installed version, saved answers
 OLD_DOTFILES="$HOME/dotfiles"       # where older versions of this installer kept the repo
 
-log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 has()  { command -v "$1" >/dev/null 2>&1; }
+
+# ---------- Output ----------
+# On a terminal: a checklist for the choices, a plan, then one line per step with a spinner,
+# while the commands' own output goes to a log file. Otherwise (CI, output into a file or a pipe,
+# DOTFILES_PLAIN=1): plain "==>" lines with all the output, as before.
+# fd 3 / 4 are the screen (stdout / stderr); on a terminal fd 1 / 2 go to the log.
+INSTALL_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/install.log"
+mkdir -p "$(dirname "$INSTALL_LOG")"; : > "$INSTALL_LOG"
+exec 3>&1 4>&2
+UI=0
+if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ "${DOTFILES_PLAIN:-0}" != 1 ]; then UI=1; fi
+HAS_TTY=0; ( exec </dev/tty ) 2>/dev/null && HAS_TTY=1
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) UTF=1 ;; *) UTF=0 ;; esac
+ESC=$'\033'
+# Colours for anything drawn on the terminal (screen, checklist, prompts)
+TB="${ESC}[1m"; TD="${ESC}[2m"; TG="${ESC}[32m"; TY="${ESC}[33m"; TR="${ESC}[31m"; TC="${ESC}[36m"; TN="${ESC}[0m"
+if [ "$UI" = 1 ]; then B="$TB"; D="$TD"; G="$TG"; Y="$TY"; R="$TR"; C="$TC"; N="$TN"
+else B=""; D=""; G=""; Y=""; R=""; C=""; N=""; fi
+if [ "$UTF" = 1 ]; then
+  S_OK="✓"; S_BAD="✗"; S_WARN="!"; S_NEW="+"; S_UP="↑"; S_TO="→"; S_PTR="›"; S_DOT="·"; S_ON="◉"; S_OFF="○"
+  SPIN_FRAMES=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+else
+  S_OK="ok"; S_BAD="xx"; S_WARN="!"; S_NEW="+"; S_UP="^"; S_TO="->"; S_PTR=">"; S_DOT="-"; S_ON="[x]"; S_OFF="[ ]"
+  SPIN_FRAMES=("|" "/" "-" "\\")
+fi
+COLS=80
+if [ "$HAS_TTY" = 1 ]; then
+  c="$(stty size </dev/tty 2>/dev/null | awk '{print $2}' || true)"
+  case "$c" in ''|*[!0-9]*) ;; *) [ "$c" -gt 20 ] && COLS="$c" ;; esac
+fi
+[ "$UI" = 1 ] && exec >>"$INSTALL_LOG" 2>&1
+
+SPIN_PID=""; STEP_LABEL=""; STEP_T0=0; STEP_BAD=0; STEP_MSGS=()
+# A background loop redraws "⠋ label  12s  <last line of the log>" until spin_stop
+spin_start() {
+  [ "$UI" = 1 ] || return 0
+  local label="$1" t0="$SECONDS"
+  (
+    trap 'exit 0' TERM
+    i=0; nf=${#SPIN_FRAMES[@]}
+    while :; do
+      d="$(tail -n 1 "$INSTALL_LOG" 2>/dev/null | tr -d '\r' | sed "s/${ESC}\[[0-9;?]*[A-Za-z]//g; /^==> /d; /^!! /d" || true)"
+      w=$((COLS - ${#label} - 14)); [ "$w" -gt 0 ] || w=0
+      printf '\r%s[K  %s%s%s %s %s%ss  %s%s' "$ESC" "$TC" "${SPIN_FRAMES[$((i % nf))]}" "$TN" "$label" \
+        "$TD" "$((SECONDS - t0))" "${d:0:$w}" "$TN" >&3
+      i=$((i + 1)); sleep 0.2 2>/dev/null || sleep 1
+    done
+  ) &
+  SPIN_PID=$!
+}
+spin_stop() {
+  if [ -n "$SPIN_PID" ]; then
+    kill "$SPIN_PID" 2>/dev/null || true; wait "$SPIN_PID" 2>/dev/null || true; SPIN_PID=""
+    printf '\r%s[K' "$ESC" >&3
+  fi
+}
+step_end() { # finish the current step: "✓ label (12s)", or "!" when something in it failed
+  [ -n "$STEP_LABEL" ] || return 0
+  if [ "$UI" = 1 ]; then
+    spin_stop
+    if [ "$STEP_BAD" = 1 ]; then m="$Y$S_WARN$N"; else m="$G$S_OK$N"; fi
+    printf '  %s %s %s(%ss)%s\n' "$m" "$STEP_LABEL" "$D" "$((SECONDS - STEP_T0))" "$N" >&3
+    for r in ${STEP_MSGS[@]+"${STEP_MSGS[@]}"}; do printf '    %s%s\n' "$r" "$N" >&3; done
+  fi
+  STEP_LABEL=""; STEP_MSGS=()
+}
+step() { # step LABEL: start a step (and end the previous one)
+  step_end
+  STEP_LABEL="$*"; STEP_T0="$SECONDS"; STEP_BAD=0
+  printf '==> %s\n' "$*"   # the log, or the screen when not on a terminal
+  spin_start "$*"
+}
+log() { # an information line
+  if [ "$UI" = 1 ]; then printf '\r%s[K  %s%s%s %s\n' "$ESC" "$C" "$S_DOT" "$N" "$*" >&3; fi
+  printf '==> %s\n' "$*"
+}
+note() { # a detail, shown under the current step
+  if [ "$UI" = 1 ] && [ -n "$STEP_LABEL" ]; then STEP_MSGS+=("$D$*$N")
+  elif [ "$UI" = 1 ]; then printf '\r%s[K    %s%s%s\n' "$ESC" "$D" "$*" "$N" >&3; fi
+  printf '   %s\n' "$*"
+}
+warn() {
+  if [ "$UI" = 1 ]; then printf '\r%s[K  %s%s%s %s\n' "$ESC" "$Y" "$S_WARN" "$N" "$*" >&4; fi
+  printf '!! %s\n' "$*" >&2
+}
+die() {
+  spin_stop
+  if [ "$UI" = 1 ]; then
+    printf '\n  %s%s%s %s\n' "$R" "$S_BAD" "$N" "$*" >&4
+    printf '    %sfull log: %s%s\n' "$D" "$INSTALL_LOG" "$N" >&4
+  fi
+  printf 'xx %s\n' "$*" >&2
+  exit 1
+}
+on_screen() { # on_screen CMD...: run a command that may ask something (a password) on the terminal
+  local rc=0
+  spin_stop
+  "$@" >&3 2>&4 || rc=$?
+  [ -n "$STEP_LABEL" ] && spin_start "$STEP_LABEL"
+  return "$rc"
+}
+trap 'spin_stop; printf "%s[?25h" "$ESC" >&3; stty echo </dev/tty 2>/dev/null || true' EXIT
+trap 'exit 130' INT TERM
 
 # Each user gets their own Neovim, Node.js and tree-sitter in ~/.local, so users on the same
 # machine never share or overwrite each other's tools. Only shared OS packages (tmux, git,
@@ -113,8 +213,19 @@ grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=1 || IS_WSL=0
 # Android has no glibc, so prebuilt Linux binaries do not run there
 IS_TERMUX=0
 if [ -n "${TERMUX_VERSION:-}" ]; then IS_TERMUX=1; else case "${PREFIX:-}" in *com.termux*) IS_TERMUX=1 ;; esac; fi
-if [ "$IS_TERMUX" = 1 ]; then log "OS: Android, Termux ($PM)  Arch: $ARCH"
-else log "OS: $OS ($PM)  Arch: $ARCH  WSL: $IS_WSL"; fi
+if [ "$IS_TERMUX" = 1 ]; then OS_NAME="Android (Termux)"
+elif [ "$OS" = Darwin ]; then OS_NAME="macOS $(sw_vers -productVersion 2>/dev/null || true)"
+else OS_NAME="$( (. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-${NAME:-Linux}}") || echo Linux)"
+     [ "$IS_WSL" = 1 ] && OS_NAME="$OS_NAME, WSL"; fi
+if [ "$UI" = 1 ]; then
+  printf '
+  %sdotfiles%s  %sNeovim, tmux and the tools around them%s
+' "$B" "$N" "$D" "$N" >&3
+  printf '  %s%s %s %s %s %s %s%s
+
+' "$D" "$OS_NAME" "$S_DOT" "$ARCH" "$S_DOT" "$(id -un)" "($PM)" "$N" >&3
+fi
+printf '==> OS: %s (%s)  Arch: %s  WSL: %s\n' "$OS_NAME" "$PM" "$ARCH" "$IS_WSL"
 
 # The official nvim / node / tree-sitter / uv / Python builds need glibc: use the package
 # manager's on macOS, musl (Alpine) and Termux
@@ -123,97 +234,10 @@ USE_PM_NVIM=0; USE_PM_NODE=0; USE_PM_TOOLS=0
 [ "$PM" = apk ]  && { USE_PM_NVIM=1; USE_PM_NODE=1; USE_PM_TOOLS=1; }
 [ "$IS_TERMUX" = 1 ] && { USE_PM_NVIM=1; USE_PM_NODE=1; USE_PM_TOOLS=1; }
 
-# ---------- Questions (asked up front so the rest runs unattended) ----------
-# INSTALL_CLAUDE=1/0 and CLAUDE_PLUGINS="a b" preset the answers; with no terminal
-# (CI, cron) and nothing preset, Claude Code is skipped.
-# name|source|description; source is a marketplace (official, knowledge-work) or "skill"
-CLAUDE_WORKFLOW_PLUGINS=(
-  "commit-commands|official|commit, push and open pull requests"
-  "code-review|official|review your changes before committing"
-  "feature-dev|official|guided feature development workflow"
-  "security-guidance|official|warn about security issues while Claude edits"
-  "code-simplifier|official|simplify code Claude just changed, same behaviour"
-  "claude-md-management|official|keep the project's CLAUDE.md notes up to date"
-  "superpowers|official|brainstorm, TDD and debugging workflows (third-party)"
-  "context7|official|up-to-date library docs for Claude (third-party)"
-  "frontend-design|official|distinctive, production-grade web UI design"
-  "playwright|official|let Claude open a browser and see the page (third-party)"
-  "design|knowledge-work|design critique, accessibility and UX writing"
-  "vercel-react-best-practices|skill|React / Next.js performance rules (Vercel)"
-)
-HAS_TTY=0; ( exec </dev/tty ) 2>/dev/null && HAS_TTY=1
-ask() { # ask PROMPT DEFAULT -> REPLY
-  REPLY="$2"
-  [ "$HAS_TTY" = 1 ] || return 0
-  printf '\033[1;36m??\033[0m %s ' "$1" > /dev/tty
-  read -r REPLY < /dev/tty || true
-  [ -n "$REPLY" ] || REPLY="$2"
-}
-
-# Answers are saved, so later runs do not ask again (DOTFILES_ASK=1 asks again)
-ANSWERS="${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles/answers"
-SAVED_ANSWERS=0; ASKED=0
-if [ -z "${INSTALL_CLAUDE:-}" ] && [ -z "${CLAUDE_PLUGINS+set}" ] && [ "${DOTFILES_ASK:-0}" != 1 ] && [ -f "$ANSWERS" ]; then
-  # shellcheck source=/dev/null
-  . "$ANSWERS" # INSTALL_CLAUDE=0|1 and CLAUDE_PLUGINS="names"
-  SAVED_ANSWERS=1
-fi
-if [ -z "${INSTALL_CLAUDE:-}" ]; then
-  INSTALL_CLAUDE=0
-  if [ "$HAS_TTY" = 1 ]; then
-    ASKED=1
-    ask "Install Claude Code? [Y/n]" y
-    case "$REPLY" in [Nn]*) INSTALL_CLAUDE=0 ;; *) INSTALL_CLAUDE=1 ;; esac
-  fi
-fi
-if [ "$INSTALL_CLAUDE" = 1 ] && [ -z "${CLAUDE_PLUGINS+set}" ]; then
-  CLAUDE_PLUGINS=""
-  for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do CLAUDE_PLUGINS="$CLAUDE_PLUGINS ${e%%|*}"; done
-  if [ "$HAS_TTY" = 1 ]; then
-    ASKED=1
-    {
-      echo "   Claude Code plugins and skills:"
-      i=1; for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do
-        printf '    %2d) %-28s %s\n' "$i" "${e%%|*}" "${e##*|}"; i=$((i + 1))
-      done
-      echo "   Language-server plugins are added automatically for the languages nvim supports."
-    } > /dev/tty
-    ask "Install which? all / none / numbers, e.g. 1 3 [all]" all
-    case "$REPLY" in
-      all|ALL|a) ;;
-      none|NONE|n) CLAUDE_PLUGINS="" ;;
-      *) CLAUDE_PLUGINS=""
-         for n in $REPLY; do
-           case "$n" in
-             *[!0-9]*|"") warn "ignoring '$n'" ;;
-             *) if [ "$n" -ge 1 ] && [ "$n" -le "${#CLAUDE_WORKFLOW_PLUGINS[@]}" ]; then
-                  e="${CLAUDE_WORKFLOW_PLUGINS[$((n - 1))]}"; CLAUDE_PLUGINS="$CLAUDE_PLUGINS ${e%%|*}"
-                else warn "ignoring '$n'"; fi ;;
-           esac
-         done ;;
-    esac
-  fi
-fi
-CLAUDE_PLUGINS="$(echo ${CLAUDE_PLUGINS:-})" # normalize spaces
-case "$CLAUDE_PLUGINS" in none|NONE) CLAUDE_PLUGINS="" ;; esac
-SAVED_NOTE=""; [ "$SAVED_ANSWERS" = 1 ] && SAVED_NOTE=" (saved answer; DOTFILES_ASK=1 asks again)"
-if [ "$INSTALL_CLAUDE" = 1 ]; then
-  n=0; for p in $CLAUDE_PLUGINS; do n=$((n + 1)); done
-  log "Claude Code: yes, $n plugins and skills$SAVED_NOTE"
-else
-  log "Claude Code: no$SAVED_NOTE"
-fi
-
-
-# ---------- What to install or update ----------
-# Shown as a plan with versions, installed after one confirmation:
-#   - system (shared by every user): OS packages that are missing; installed ones are left alone
-#   - this user (~/.local, ~/.claude, ~/.local/share/nvim): installed when missing and updated
-#     to the latest release when a newer one is out
-#
-# Who can change the system: root, Homebrew, or a user with sudo (asked only when needed).
-# NO_SUDO=1 skips sudo; USE_SUDO=1 asks for the sudo password even when this user is not in
-# the wheel / sudo / admin group.
+# ---------- Who can change the system ----------
+# Root, Homebrew, or a user with sudo (the password is asked once, after the plan, and only when
+# there are system changes). NO_SUDO=1 never uses sudo; USE_SUDO=1 asks for the password even
+# when this user is not in the wheel / sudo / admin group.
 SUDO_OK=0
 if [ "$(id -u)" -eq 0 ] || [ "$IS_TERMUX" = 1 ]; then
   sudo() { "$@"; }; SUDO_OK=1 # root, or Termux where packages belong to the user
@@ -229,37 +253,217 @@ elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
   # do not ask for a password that cannot work. USE_SUDO=1 asks anyway.
 fi
 
-# Docker (asked; INSTALL_DOCKER=1/0 presets the answer). It is a system install, so it is only
-# offered with root, sudo or Homebrew. On Linux you are also added to the docker group, so docker
-# runs without sudo (that group is as powerful as root on this machine).
+# ---------- Choices (asked up front, so the rest runs unattended) ----------
+# Neovim, tmux and their tools are always installed. Optional, picked in a checklist:
+#   Claude Code and its plugins, Docker, the terminal setup (macOS) and the Nerd Font.
+# The answers are saved in ~/.config/dotfiles/answers and reused (DOTFILES_ASK=1 asks again).
+# Presets: INSTALL_CLAUDE=1|0, CLAUDE_PLUGINS="a b", INSTALL_DOCKER=1|0, SETUP_TERMINAL=1|0,
+# INSTALL_FONT=1|0 (DOTFILES_FONT=1|0 too). Without a terminal, unset ones take the defaults.
+# name|source|description; source is a marketplace (official, knowledge-work) or "skill"
+CLAUDE_WORKFLOW_PLUGINS=(
+  "commit-commands|official|commit, push and open pull requests"
+  "code-review|official|review your changes before committing"
+  "feature-dev|official|guided feature development workflow"
+  "security-guidance|official|warn about security issues while Claude edits"
+  "code-simplifier|official|simplify code Claude just changed, same behaviour"
+  "claude-md-management|official|keep the project's CLAUDE.md notes up to date"
+  "superpowers|official|brainstorm, TDD and debugging workflows (third-party)"
+  "context7|official|up-to-date library docs for Claude (third-party)"
+  "frontend-design|official|distinctive, production-grade web UI design"
+  "playwright|official|let Claude open a browser and see the page (third-party)"
+  "design|knowledge-work|design critique, accessibility and UX writing"
+  "vercel-react-best-practices|skill|React / Next.js performance rules (Vercel)"
+)
+ALL_PLUGINS=""; for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do ALL_PLUGINS="$ALL_PLUGINS ${e%%|*}"; done
+ALL_PLUGINS="${ALL_PLUGINS# }"
+
+# Docker: a system install, so only offered with root, sudo or Homebrew. On Linux you are also
+# added to the docker group, so docker runs without sudo (that group is as powerful as root).
 in_docker_group() { id -nG 2>/dev/null | tr ' ' '\n' | grep -x docker >/dev/null; }
-DOCKER_TODO="" # install | group | empty
+DOCKER_TODO="" # install | group | empty: what Docker would need here
 if [ "$IS_TERMUX" = 1 ]; then :            # Android: no kernel support for containers
 elif ! has docker; then DOCKER_TODO=install
 elif [ "$OS" = Linux ] && [ "$(id -u)" -ne 0 ] && ! in_docker_group; then DOCKER_TODO=group
 fi
-if [ -n "$DOCKER_TODO" ] && [ "$SUDO_OK" = 0 ]; then
-  if [ "${INSTALL_DOCKER:-0}" = 1 ]; then warn "Docker needs sudo, which you do not have here: ask an admin (or use rootless Docker / Podman)"
-  else log "Docker: not offered, it needs sudo"; fi
-  DOCKER_TODO=""
+DOCKER_BLOCKED=0
+if [ -n "$DOCKER_TODO" ] && [ "$SUDO_OK" = 0 ]; then DOCKER_BLOCKED=1; fi
+
+# Terminal (macOS): the one this runs in (TERM_PROGRAM; LC_TERMINAL / GHOSTTY_RESOURCES_DIR still
+# tell inside tmux) and the other one if installed; Ghostty is installed only when it is the one
+# running or asked for. DOTFILES_TERMINAL=iterm2|ghostty|none sets up only that one (or neither);
+# NO_ITERM=1 / NO_GHOSTTY=1 skip one.
+#   iTerm2: this repo's profile (iterm2/dotfiles.json: Catppuccin Mocha, JetBrainsMono Nerd Font,
+#           Option as Alt) as the default, the Minimal theme, clipboard access for programs
+#   Ghostty: ghostty/config
+USE_ITERM=0; USE_GHOSTTY=0
+if [ "$OS" = Darwin ]; then
+  case "${DOTFILES_TERMINAL:-}" in
+    iterm*|iTerm*) USE_ITERM=1 ;;
+    ghostty|Ghostty) USE_GHOSTTY=1 ;;
+    none) SETUP_TERMINAL="${SETUP_TERMINAL:-0}" ;;
+    *) if [ "${TERM_PROGRAM:-}" = iTerm.app ] || [ "${LC_TERMINAL:-}" = iTerm2 ] || [ -d /Applications/iTerm.app ]; then
+         USE_ITERM=1
+       fi
+       if [ "${TERM_PROGRAM:-}" = ghostty ] || [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] || [ -d /Applications/Ghostty.app ]; then
+         USE_GHOSTTY=1
+       fi ;;
+  esac
+  [ "${NO_ITERM:-0}" = 1 ] && USE_ITERM=0
+  [ "${NO_GHOSTTY:-0}" = 1 ] && USE_GHOSTTY=0
 fi
-if [ -z "$DOCKER_TODO" ]; then
-  INSTALL_DOCKER="${INSTALL_DOCKER:-0}"
-elif [ -z "${INSTALL_DOCKER:-}" ]; then
-  INSTALL_DOCKER=0
-  if [ "$HAS_TTY" = 1 ]; then
-    ASKED=1
-    if [ "$DOCKER_TODO" = install ]; then ask "Install Docker (system-wide, with sudo)? [y/N]" n
-    else ask "Docker is installed: add you to the docker group, to run docker without sudo? [y/N]" n; fi
-    case "$REPLY" in [Yy]*) INSTALL_DOCKER=1 ;; esac
+TERM_OFFER=""
+[ "$USE_ITERM" = 1 ] && TERM_OFFER="iTerm2 profile"
+[ "$USE_GHOSTTY" = 1 ] && TERM_OFFER="${TERM_OFFER:+$TERM_OFFER + }Ghostty config"
+# The font matters only where the terminal runs: macOS, or a Linux desktop session. A server
+# reached over SSH, WSL (the terminal is on Windows) and Termux get none.
+FONT_OFFER=0
+if [ "$OS" = Darwin ]; then
+  [ -n "$TERM_OFFER" ] && FONT_OFFER=1
+elif [ "$IS_WSL" = 0 ] && [ "$IS_TERMUX" = 0 ] && [ -z "${SSH_CONNECTION:-}" ] \
+     && { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${XDG_CURRENT_DESKTOP:-}" ]; }; then
+  FONT_OFFER=1
+fi
+case "${DOTFILES_FONT:-}" in 1|0) INSTALL_FONT="${INSTALL_FONT:-$DOTFILES_FONT}"; [ "$DOTFILES_FONT" = 1 ] && FONT_OFFER=1 ;; esac
+
+# Saved answers fill in what is not preset; anything still open is asked
+ANSWERS="$STATE_DIR/answers"
+SAVED_ANSWERS=0
+if [ "${DOTFILES_ASK:-0}" != 1 ] && [ -f "$ANSWERS" ]; then
+  for k in INSTALL_CLAUDE CLAUDE_PLUGINS INSTALL_DOCKER SETUP_TERMINAL INSTALL_FONT; do
+    v="$(sed -n "s/^$k=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$ANSWERS" | tail -1)"
+    if [ -z "$(eval "echo \${$k+set}")" ] && grep -q "^$k=" "$ANSWERS"; then eval "$k=\"\$v\""; SAVED_ANSWERS=1; fi
+  done
+fi
+OPEN=0 # something that applies here has no answer yet
+[ -z "${INSTALL_CLAUDE:-}" ] && OPEN=1
+[ -n "$DOCKER_TODO" ] && [ "$DOCKER_BLOCKED" = 0 ] && [ -z "${INSTALL_DOCKER:-}" ] && OPEN=1
+[ -n "$TERM_OFFER" ] && [ -z "${SETUP_TERMINAL:-}" ] && OPEN=1
+[ "$FONT_OFFER" = 1 ] && [ -z "${INSTALL_FONT:-}" ] && OPEN=1
+
+# The checklist, drawn on the terminal: ↑↓ (or j k) move, Space toggles, a / n all / none,
+# Enter continues, q quits. Rows: id | label | description | kind (main, sub, off)
+M_ID=(); M_LABEL=(); M_DESC=(); M_KIND=(); M_ON=()
+m_add() { M_ID+=("$1"); M_LABEL+=("$2"); M_DESC+=("$3"); M_KIND+=("$4"); M_ON+=("$5"); }
+m_draw() { # m_draw CURSOR
+  local i on mark lab desc w pre parent_on=1
+  printf '  %sChoose what to install%s  %s(Neovim, tmux, LSP servers and git tools always)%s%s[K\n%s[K\n' \
+    "$TB" "$TN" "$TD" "$TN" "$ESC" "$ESC" >/dev/tty
+  for i in "${!M_ID[@]}"; do
+    on="${M_ON[$i]}"; lab="${M_LABEL[$i]}"; desc="${M_DESC[$i]}"
+    [ "${M_KIND[$i]}" = main ] && parent_on="$on"
+    if [ "$i" = "$1" ]; then pre="$TC$S_PTR$TN"; else pre=" "; fi
+    st=""
+    if [ "${M_KIND[$i]}" = off ]; then mark="$TD$S_DOT$TN"; st="$TD"
+    elif [ "$on" = 1 ]; then mark="$TG$S_ON$TN"; else mark="$TD$S_OFF$TN"; fi
+    if [ "${M_KIND[$i]}" = sub ]; then
+      [ "$parent_on" = 1 ] || { mark="$TD$S_OFF$TN"; st="$TD"; }
+      lab="    $lab"
+    fi
+    [ "$i" = "$1" ] && st="$st$TB"
+    lab="$(printf '%-33s' "$lab")"
+    w=$((COLS - 40)); [ "$w" -gt 0 ] || w=0
+    printf ' %s %s %s%s%s %s%s%s%s[K\n' "$pre" "$mark" "$st" "$lab" "$TN" "$TD" "${desc:0:$w}" "$TN" "$ESC" >/dev/tty
+  done
+  printf '%s[K\n  %s↑↓ move  Space toggle  a all  n none  Enter continue  q quit%s%s[K\n' \
+    "$ESC" "$TD" "$TN" "$ESC" >/dev/tty
+}
+m_lines() { echo $(( ${#M_ID[@]} + 4 )); }
+m_key() { # -> KEY
+  local k="" k2=""
+  IFS= read -rsn1 k </dev/tty || k=q
+  if [ "$k" = "$ESC" ]; then IFS= read -rsn2 -t 1 k2 </dev/tty || true; k="ESC$k2"; fi
+  KEY="$k"
+}
+m_run() {
+  local cur=0 n=${#M_ID[@]} i j L
+  L="$(m_lines)"
+  while [ "${M_KIND[$cur]}" = off ] && [ "$cur" -lt $((n - 1)) ]; do cur=$((cur + 1)); done
+  printf '%s[?25l' "$ESC" >/dev/tty; stty -echo </dev/tty 2>/dev/null || true
+  m_draw "$cur"
+  while :; do
+    m_key
+    case "$KEY" in
+      "ESC[A"|"ESCOA"|k) j=$cur; while [ "$j" -gt 0 ]; do j=$((j - 1)); [ "${M_KIND[$j]}" != off ] && { cur=$j; break; }; done ;;
+      "ESC[B"|"ESCOB"|j) j=$cur; while [ "$j" -lt $((n - 1)) ]; do j=$((j + 1)); [ "${M_KIND[$j]}" != off ] && { cur=$j; break; }; done ;;
+      " "|x)
+        if [ "${M_KIND[$cur]}" = sub ]; then
+          # a plugin of a parent that is off: switch both on (it looked off already)
+          j=$cur; while [ "$j" -gt 0 ]; do j=$((j - 1)); [ "${M_KIND[$j]}" = main ] && break; done
+          if [ "${M_ON[$j]}" = 0 ]; then M_ON[$j]=1; M_ON[$cur]=1
+          elif [ "${M_ON[$cur]}" = 1 ]; then M_ON[$cur]=0; else M_ON[$cur]=1; fi
+        elif [ "${M_KIND[$cur]}" != off ]; then
+          if [ "${M_ON[$cur]}" = 1 ]; then M_ON[$cur]=0; else M_ON[$cur]=1; fi
+        fi ;;
+      a|A) for i in "${!M_ID[@]}"; do [ "${M_KIND[$i]}" = off ] || M_ON[$i]=1; done ;;
+      n|N) for i in "${!M_ID[@]}"; do [ "${M_KIND[$i]}" = off ] || M_ON[$i]=0; done ;;
+      "") break ;;
+      q|Q) printf '%s[?25h' "$ESC" >/dev/tty; stty echo </dev/tty 2>/dev/null || true
+           printf '\n  Nothing changed.\n' >/dev/tty; exit 0 ;;
+    esac
+    printf '%s[%dA' "$ESC" "$L" >/dev/tty
+    m_draw "$cur"
+  done
+  # replace the checklist with a one-line summary (printed below)
+  printf '%s[%dA%s[J%s[?25h' "$ESC" "$L" "$ESC" "$ESC" >/dev/tty; stty echo </dev/tty 2>/dev/null || true
+}
+m_value() { # m_value ID -> 1 / 0
+  local i; for i in "${!M_ID[@]}"; do [ "${M_ID[$i]}" = "$1" ] && { echo "${M_ON[$i]}"; return; }; done; echo 0
+}
+
+if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "${DOTFILES_ASK:-0}" = 1 ]; }; then
+  # preselected: the saved / preset answers, else Claude Code with all plugins, terminal and font
+  # on, Docker off
+  sel="${CLAUDE_PLUGINS-$ALL_PLUGINS}"
+  m_add claude "Claude Code" "AI coding agent, sees the file you have open in nvim" main "${INSTALL_CLAUDE:-1}"
+  for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do
+    nm="${e%%|*}"; on=0; case " $sel " in *" $nm "*) on=1 ;; esac
+    m_add "plugin:$nm" "$nm" "${e##*|}" sub "$on"
+  done
+  if [ "$DOCKER_BLOCKED" = 1 ]; then m_add docker "Docker" "needs sudo, which you do not have here" off 0
+  elif [ "$DOCKER_TODO" = install ] && [ "$PM" = brew ]; then m_add docker "Docker" "Docker Desktop" main "${INSTALL_DOCKER:-0}"
+  elif [ "$DOCKER_TODO" = install ]; then m_add docker "Docker" "Engine + Compose, and you in the docker group (sudo)" main "${INSTALL_DOCKER:-0}"
+  elif [ "$DOCKER_TODO" = group ]; then m_add docker "docker group" "run docker without sudo (Docker is installed)" main "${INSTALL_DOCKER:-0}"
   fi
+  [ -n "$TERM_OFFER" ] && m_add terminal "Terminal setup" "$TERM_OFFER: Catppuccin, Nerd Font, Option as Alt" main "${SETUP_TERMINAL:-1}"
+  [ "$FONT_OFFER" = 1 ] && m_add font "JetBrainsMono Nerd Font" "the icons in nvim and tmux" main "${INSTALL_FONT:-1}"
+  m_run
+  INSTALL_CLAUDE="$(m_value claude)"
+  CLAUDE_PLUGINS=""
+  for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do
+    nm="${e%%|*}"; [ "$(m_value "plugin:$nm")" = 1 ] && CLAUDE_PLUGINS="$CLAUDE_PLUGINS $nm"
+  done
+  CLAUDE_PLUGINS="${CLAUDE_PLUGINS# }"
+  if [ -n "$DOCKER_TODO" ] && [ "$DOCKER_BLOCKED" = 0 ]; then INSTALL_DOCKER="$(m_value docker)"; fi
+  [ -n "$TERM_OFFER" ] && SETUP_TERMINAL="$(m_value terminal)"
+  [ "$FONT_OFFER" = 1 ] && INSTALL_FONT="$(m_value font)"
+  SAVED_ANSWERS=0
+  mkdir -p "$STATE_DIR"
+  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\n' \
+    "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "${INSTALL_DOCKER:-0}" "${SETUP_TERMINAL:-1}" "${INSTALL_FONT:-1}" > "$ANSWERS"
 fi
-[ "$INSTALL_DOCKER" = 1 ] || DOCKER_TODO=""
-if [ -n "$DOCKER_TODO" ]; then log "Docker: yes"; fi
-if [ "$ASKED" = 1 ]; then
-  mkdir -p "$(dirname "$ANSWERS")"
-  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nINSTALL_DOCKER=%s\n' "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "$INSTALL_DOCKER" > "$ANSWERS"
+# Defaults for anything still unset (no terminal: CI, cron)
+INSTALL_CLAUDE="${INSTALL_CLAUDE:-0}"; INSTALL_DOCKER="${INSTALL_DOCKER:-0}"
+SETUP_TERMINAL="${SETUP_TERMINAL:-1}"; INSTALL_FONT="${INSTALL_FONT:-1}"
+if [ "$INSTALL_CLAUDE" = 1 ]; then CLAUDE_PLUGINS="${CLAUDE_PLUGINS-$ALL_PLUGINS}"; else CLAUDE_PLUGINS=""; fi
+CLAUDE_PLUGINS="$(echo ${CLAUDE_PLUGINS:-})" # normalize spaces
+case "$CLAUDE_PLUGINS" in none|NONE) CLAUDE_PLUGINS="" ;; esac
+if [ "$INSTALL_DOCKER" = 1 ] && [ "$DOCKER_BLOCKED" = 1 ]; then
+  warn "Docker needs sudo, which you do not have here: ask an admin (or use rootless Docker / Podman)"
 fi
+[ "$INSTALL_DOCKER" = 1 ] && [ "$DOCKER_BLOCKED" = 0 ] || DOCKER_TODO=""
+[ "$SETUP_TERMINAL" = 1 ] || { USE_ITERM=0; USE_GHOSTTY=0; }
+want_font=0; [ "$FONT_OFFER" = 1 ] && [ "$INSTALL_FONT" = 1 ] && want_font=1
+
+# One line with the choices
+n=0; for p in $CLAUDE_PLUGINS; do n=$((n + 1)); done
+CH=""
+if [ "$INSTALL_CLAUDE" = 1 ]; then CH="Claude Code ($n plugins)"; else CH="no Claude Code"; fi
+if [ -n "$DOCKER_TODO" ]; then CH="$CH $S_DOT Docker"; fi
+if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then CH="$CH $S_DOT terminal setup"; fi
+[ "$want_font" = 1 ] && CH="$CH $S_DOT Nerd Font"
+if [ "$SAVED_ANSWERS" = 1 ]; then CH="$CH  ${D}(saved; DOTFILES_ASK=1 to change)${N}"; fi
+log "Choices: $CH"
+
 # Bound slow steps so a network problem cannot hang forever. macOS has no `timeout`: use gtimeout
 # (coreutils) or perl's alarm, which kills the command when the time is up.
 with_timeout() {
@@ -271,7 +475,7 @@ with_timeout() {
 }
 # git must never stop to ask for a username or password (it would wait forever, unseen)
 export GIT_TERMINAL_PROMPT=0
-log "Checking what is installed and the latest versions"
+[ "$UI" = 1 ] || log "Checking what is installed and the latest versions"
 
 # OS packages as package[:command]. A package counts as installed when the package manager has
 # it or, when a command is given, that command is on PATH (e.g. a git built from source).
@@ -422,7 +626,7 @@ timeout_cmd() { with_timeout "$@" </dev/null; }
 # The network lookups run in parallel in the background; each writes its answer to a file and
 # is reported as it finishes, so a slow one does not hold up the others.
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'spin_stop; printf "%s[?25h" "$ESC" >&3; rm -rf "$TMP"' EXIT
 LOOKUP="$TMP/lookup"; mkdir -p "$LOOKUP"
 L_PIDS=(); L_NAMES=(); L_LABELS=()
 lookup() { # lookup NAME LABEL FUNCTION...
@@ -466,21 +670,25 @@ fi
 lookup_wait() {
   local i n=${#L_PIDS[@]} start=$SECONDS shown="" pending
   [ "$n" -gt 0 ] || return 0
-  [ -t 1 ] || echo "   looking up: ${L_LABELS[*]}"
+  [ "$UI" = 1 ] || echo "   looking up: ${L_LABELS[*]}"
   while :; do
     pending=""
     for i in "${!L_PIDS[@]}"; do
       case " $shown " in *" $i "*) continue ;; esac
       if kill -0 "${L_PIDS[$i]}" 2>/dev/null; then pending="$pending, ${L_LABELS[$i]}"; continue; fi
       shown="$shown $i"
-      [ -t 1 ] || printf '   %-20s done (%ss)\n' "${L_LABELS[$i]}" "$((SECONDS - start))"
+      [ "$UI" = 1 ] || printf '   %-20s done (%ss)\n' "${L_LABELS[$i]}" "$((SECONDS - start))"
     done
     # On a terminal: one line that updates in place
     [ -z "$pending" ] && break
-    [ -t 1 ] && printf '\r\033[K   %ss  waiting for: %s' "$((SECONDS - start))" "${pending#, }"
+    if [ "$UI" = 1 ]; then
+      w="$(printf '%s' "${pending#, }" | cut -c1-$((COLS - 24)))"
+      printf '\r%s[K  %s%s%s checking %s%ss  %s%s' "$ESC" "$C" "${SPIN_FRAMES[$((SECONDS % ${#SPIN_FRAMES[@]}))]}" "$N" "$D" \
+        "$((SECONDS - start))" "$w" "$N" >&3
+    fi
     sleep 1
   done
-  [ -t 1 ] && printf '\r\033[K   checked %d items in %ss\n' "$n" "$((SECONDS - start))"
+  if [ "$UI" = 1 ]; then printf '\r%s[K  %s%s%s checked %d versions %s(%ss)%s\n' "$ESC" "$G" "$S_OK" "$N" "$n" "$D" "$((SECONDS - start))" "$N" >&3; fi
   wait 2>/dev/null || true
 }
 lookup_wait
@@ -657,12 +865,12 @@ fi
 [ "$RM_OLD" = 1 ] && user_plan "old ~/dotfiles" "removed (no longer used: the config is copied into place)"
 [ "$NEED_OMT" = 1 ]      && user_plan "Oh my tmux!" "new, latest commit"
 if [ -n "$OMT_UPD" ]; then set -- $OMT_UPD; user_plan "Oh my tmux!" "$1 -> $2 ($3 new commits)"; fi
-[ "$NEED_LAZY" = 1 ]     && user_plan "nvim plugins" "new: LazyVim, LSP servers, formatters, parsers (latest)"
+[ "$NEED_LAZY" = 1 ]     && user_plan "nvim plugins" "new, LazyVim, LSP servers, formatters, parsers (latest)"
 [ "$NEED_CLAUDE" = 1 ]   && user_plan "Claude Code" "$(change "$CLAUDE_CUR" "$CLAUDE_LATEST" "~/.local/bin")"
-for p in $MISS_PLUGINS; do
-  if [ "$(plugin_source "$p")" = skill ]; then user_plan "Claude skill $p" "new, latest"
-  else user_plan "Claude plugin $p" "new, latest"; fi
-done
+if [ -n "$MISS_PLUGINS" ]; then
+  n=0; for p in $MISS_PLUGINS; do n=$((n + 1)); done
+  user_plan "Claude plugins" "new $n, ${MISS_PLUGINS// /, }"
+fi
 # Claude Code settings this installer manages in ~/.claude/settings.json (only keys that are unset)
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 NEED_CLAUDE_ATTR=0; NEED_GIT_HOOK=0
@@ -683,33 +891,7 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
   fi
 fi
 
-# ---- Terminal: Nerd Font, Ghostty, iTerm2 ----
-# The font matters only where the terminal runs: macOS, or a Linux desktop session. A server
-# reached over SSH, WSL (the terminal is on Windows) and Termux get none. DOTFILES_FONT=1|0 forces it.
-# macOS: set up the terminal this runs in (TERM_PROGRAM; LC_TERMINAL / GHOSTTY_RESOURCES_DIR still
-# tell inside tmux) and the other one if installed. Ghostty is installed only when it is the one
-# running or asked for. DOTFILES_TERMINAL=iterm2|ghostty|none sets up only that one (or neither);
-# NO_ITERM=1 / NO_GHOSTTY=1 skip one.
-#   iTerm2: this repo's profile (iterm2/dotfiles.json, a Dynamic Profile: Catppuccin Mocha,
-#           JetBrainsMono Nerd Font, Option as Alt) as the default, and clipboard access for
-#           programs in the terminal (tmux / nvim copying over SSH)
-#   Ghostty: ghostty/config, linked with the other dotfiles below
-USE_ITERM=0; USE_GHOSTTY=0
-if [ "$OS" = Darwin ]; then
-  case "${DOTFILES_TERMINAL:-}" in
-    iterm*|iTerm*) USE_ITERM=1 ;;
-    ghostty|Ghostty) USE_GHOSTTY=1 ;;
-    none) ;;
-    *) if [ "${TERM_PROGRAM:-}" = iTerm.app ] || [ "${LC_TERMINAL:-}" = iTerm2 ] || [ -d /Applications/iTerm.app ]; then
-         USE_ITERM=1
-       fi
-       if [ "${TERM_PROGRAM:-}" = ghostty ] || [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] || [ -d /Applications/Ghostty.app ]; then
-         USE_GHOSTTY=1
-       fi ;;
-  esac
-  [ "${NO_ITERM:-0}" = 1 ] && USE_ITERM=0
-  [ "${NO_GHOSTTY:-0}" = 1 ] && USE_GHOSTTY=0
-fi
+# ---- Terminal: Nerd Font, Ghostty, iTerm2 (chosen above) ----
 NEED_GHOSTTY=0
 if [ "$USE_GHOSTTY" = 1 ] && [ ! -d /Applications/Ghostty.app ]; then
   NEED_GHOSTTY=1
@@ -717,17 +899,6 @@ if [ "$USE_GHOSTTY" = 1 ] && [ ! -d /Applications/Ghostty.app ]; then
 fi
 
 FONT_DIR="$DATA_HOME/fonts/JetBrainsMonoNerdFont" # Linux
-want_font=0
-case "${DOTFILES_FONT:-}" in
-  1) want_font=1 ;;
-  0) ;;
-  *) if [ "$OS" = Darwin ]; then
-       if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then want_font=1; fi
-     elif [ "$IS_WSL" = 0 ] && [ "$IS_TERMUX" = 0 ] && [ -z "${SSH_CONNECTION:-}" ] \
-          && { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${XDG_CURRENT_DESKTOP:-}" ]; }; then
-       want_font=1
-     fi ;;
-esac
 font_installed() {
   local f
   for f in "$HOME"/Library/Fonts/JetBrainsMonoNerdFont* /Library/Fonts/JetBrainsMonoNerdFont* "$FONT_DIR"; do
@@ -763,9 +934,49 @@ if [ "$USE_ITERM" = 1 ] && ! defaults read com.googlecode.iterm2 TabStyleWithAut
   user_plan "iTerm2 theme" "Minimal (title bar in the terminal's colour)"
 fi
 
+# On a terminal: "+ name  version  where" (new) or "↑ name  a → b" (update), grouped
+plan_rows() {
+  local r name d sym ver rest wn=0 wv=0 i room
+  local -a SY=() NA=() VE=() RE=()
+  for r in "$@"; do
+    name="${r%%$'\t'*}"; d="${r#*$'\t'}"; sym="$C$S_DOT$N"; ver=""; rest="$d"
+    case "$d" in
+      "new, "*) sym="$G$S_NEW$N"; rest="${d#new, }" ;;
+      "new "*)  sym="$G$S_NEW$N"; d="${d#new }"; ver="${d%%, *}"; rest=""; [ "$ver" != "$d" ] && rest="${d#*, }" ;;
+      *" -> "*) sym="$Y$S_UP$N"; ver="${d%%, *}"; rest=""; [ "$ver" != "$d" ] && rest="${d#*, }"
+                ver="${ver/ -> / $S_TO }" ;;
+    esac
+    SY+=("$sym"); NA+=("$name"); VE+=("$ver"); RE+=("$rest")
+    [ ${#name} -gt "$wn" ] && wn=${#name}
+    [ ${#ver} -gt "$wv" ] && wv=${#ver}
+  done
+  for i in "${!NA[@]}"; do
+    room=$((COLS - wn - wv - 10)); [ "$room" -gt 0 ] || room=0
+    rest="${RE[$i]}"; [ ${#rest} -gt "$room" ] && rest="${rest:0:$((room > 1 ? room - 1 : 0))}…"
+    printf '    %s %-*s  %s%-*s%s  %s%s%s\n' "${SY[$i]}" "$wn" "${NA[$i]}" "$B" "$wv" "${VE[$i]}" "$N" "$D" "$rest" "$N" >&3
+  done
+}
 if [ ${#SYS_PLAN[@]} -eq 0 ] && [ ${#USER_PLAN[@]} -eq 0 ]; then
-  log "Everything is installed and up to date"
+  if [ "$UI" = 1 ]; then printf '\n  %s%s%s Everything is installed and up to date %s(the config files are still synced)%s\n\n' "$G" "$S_OK" "$N" "$D" "$N" >&3
+  else log "Everything is installed and up to date"; fi
+elif [ "$UI" = 1 ]; then
+  printf '\n' >&3
+  if [ ${#SYS_PLAN[@]} -gt 0 ]; then
+    case "$SUDO_OK" in
+      0) h="${R}no sudo here: not changed, ask an admin${N}" ;;
+      1) if [ "$PM" = brew ]; then h="Homebrew"; elif [ "$(id -u)" -eq 0 ]; then h="as root"; else h="sudo"; fi ;;
+      2) h="sudo, asks for your password" ;;
+    esac
+    printf '  %sSystem%s %s%s for every user, %s%s\n' "$B" "$N" "$D" "$S_DOT" "$h" "$N" >&3
+    plan_rows "${SYS_PLAN[@]}"
+  fi
+  if [ ${#USER_PLAN[@]} -gt 0 ]; then
+    printf '  %sYou%s %s%s only %s, in ~, no sudo%s\n' "$B" "$N" "$D" "$S_DOT" "$(id -un)" "$N" >&3
+    plan_rows "${USER_PLAN[@]}"
+  fi
+  printf '\n  %sInstalled OS packages are kept as they are; your own tools follow the latest release.%s\n' "$D" "$N" >&3
 else
+  # plain output (CI, a pipe): one block, the same format as always
   log "To install or update:"
   if [ ${#SYS_PLAN[@]} -gt 0 ]; then
     case "$SUDO_OK" in
@@ -782,23 +993,36 @@ else
     print_rows "${USER_PLAN[@]}"
   fi
   echo "   Installed OS packages are left as they are; everything else is kept at the latest release."
-  echo "   nvim plugins and LSP servers are updated to the latest too; the summary lists what changed."
-  if [ "$HAS_TTY" = 1 ] && [ "${ASSUME_YES:-0}" != 1 ]; then
-    ask "Continue? [Y/n]" y
-    case "$REPLY" in [Nn]*) log "Nothing changed"; exit 0 ;; esac
-  fi
 fi
+# One confirmation (a key press) on a terminal; ASSUME_YES=1 skips it
+if [ $((${#SYS_PLAN[@]} + ${#USER_PLAN[@]})) -gt 0 ] && [ "$HAS_TTY" = 1 ] && [ "${ASSUME_YES:-0}" != 1 ]; then
+  printf '\n  %sInstall?%s %s[Y/n]%s ' "$TB" "$TN" "$TD" "$TN" >/dev/tty
+  k=""; IFS= read -rsn1 k </dev/tty || k=n
+  case "$k" in
+    [Nn]|[Qq]|"$ESC") printf 'no\n\n  Nothing changed.\n' >/dev/tty; exit 0 ;;
+    *) printf 'yes\n\n' >/dev/tty ;;
+  esac
+fi
+RUN_T0="$SECONDS"
 
 # Everything that gets installed is recorded here and listed at the end
 DONE=(); SYS_DONE=(); FAILED=()
 did()     { DONE+=("$*"); }
 sys_did() { SYS_DONE+=("$*"); }
-failed() { FAILED+=("$*"); warn "not installed: $*"; }
+failed() { # on a terminal it is shown under its step, and again in the summary
+  FAILED+=("$*"); STEP_BAD=1
+  if [ "$UI" = 1 ] && [ -n "$STEP_LABEL" ]; then STEP_MSGS+=("${Y}not installed: $*"); printf '!! not installed: %s\n' "$*" >&2
+  else warn "not installed: $*"; fi
+}
 
 # ---------- OS packages ----------
 if [ "$NEED_SYS" = 1 ] && [ "$SUDO_OK" = 2 ]; then
-  log "sudo is used only for the system changes listed above"
-  if sudo -v; then SUDO_OK=1; else SUDO_OK=0; fi
+  if [ "$UI" = 1 ]; then printf '  %ssudo is used only for the system changes listed above%s\n' "$D" "$N" >&3; fi
+  if sudo -v </dev/tty >&3 2>&4; then
+    SUDO_OK=1
+    # keep the sudo timestamp fresh, so a long install never stops to ask again
+    ( while kill -0 $$ 2>/dev/null; do sudo -n -v 2>/dev/null || true; sleep 50; done ) &
+  else SUDO_OK=0; fi
 fi
 pm_add() { # pm_add PACKAGE...
   case "$PM" in
@@ -813,10 +1037,11 @@ pm_add() { # pm_add PACKAGE...
   esac
 }
 if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
-  log "Installing OS packages"
+  step "Installing OS packages"
   if [ "$NEED_BREW" = 1 ]; then
-    log "Installing Homebrew"
-    NONINTERACTIVE=1 bash -c "$(fetch https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    step "Installing Homebrew"
+    fetch https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh "$TMP/brew-install.sh"
+    on_screen env NONINTERACTIVE=1 bash "$TMP/brew-install.sh" # asks for the sudo password
     for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$b" ] && eval "$("$b" shellenv)"; done
     sys_did "Homebrew"
   fi
@@ -828,7 +1053,7 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
       zypper)  sudo zypper --non-interactive refresh || true ;;
       apk)     sudo apk update ;;
       brew)    # quietly: its own output lists every new formula (hundreds of lines)
-               log "Updating Homebrew (brew update)"
+               step "Updating Homebrew (brew update)"
                brew update --quiet >/dev/null 2>&1 || warn "brew update failed, installing with the current package list" ;;
     esac
   fi
@@ -859,13 +1084,14 @@ fi
 
 # ---------- Docker (asked at the start) ----------
 if [ "$NEED_DOCKER" = 1 ] && [ "$SUDO_OK" = 1 ]; then
-  log "Installing Docker"
+  step "Installing Docker"
   docker_ok=0
   case "$PM" in
     brew)
       # the cask was renamed from docker to docker-desktop
-      { HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask docker-desktop || HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask docker; } \
-        > "$TMP/docker.log" 2>&1 && docker_ok=1 ;;
+      # may ask for your password (it installs a helper as root)
+      if on_screen env HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask docker-desktop \
+         || on_screen env HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask docker; then docker_ok=1; fi ;;
     apt-get|yum)
       # shellcheck disable=SC2024 # the log is written as this user, on purpose
       # Docker's own script; distributions it does not know (e.g. Linux Mint) get the distro's package
@@ -919,7 +1145,7 @@ if ! has fd && has fdfind; then ln -sf "$(command -v fdfind)" "$LOCAL_BIN/fd"; f
 # glibc Linux: official release in ~/.local/opt/nvim (distro versions are often too old; the
 # config needs >= 0.11). macOS and Alpine use the package manager's Neovim.
 if [ "$NEED_NVIM" = 1 ]; then
-  log "Installing Neovim ${NVIM_LATEST:-latest} ($NVIM_ARCH) in ~/.local/opt/nvim"
+  step "Installing Neovim ${NVIM_LATEST:-latest} ($NVIM_ARCH) in ~/.local/opt/nvim"
   if [ -n "$NVIM_LATEST" ]; then u="download/$NVIM_LATEST"; else u="latest/download"; fi
   fetch "https://github.com/neovim/neovim/releases/$u/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
   rm -rf "$LOCAL_OPT/nvim" && mkdir -p "$LOCAL_OPT/nvim"
@@ -940,9 +1166,10 @@ if [ "$NEED_NODE" = 1 ] && [ -z "$NODE_LATEST" ]; then
   NODE_LATEST="$(lk_node || true)"
 fi
 if [ "$NEED_NODE" = 1 ] && [ -z "$NODE_LATEST" ]; then
+  step "Installing Node.js"
   failed "Node.js (could not look up the latest LTS on nodejs.org)"
 elif [ "$NEED_NODE" = 1 ]; then
-  log "Installing Node.js $NODE_LATEST ($NODE_ARCH) in ~/.local/opt/node"
+  step "Installing Node.js $NODE_LATEST ($NODE_ARCH) in ~/.local/opt/node"
   NODE_TAR="node-$NODE_LATEST-linux-$NODE_ARCH.tar.xz"
   fetch "https://nodejs.org/dist/$NODE_LATEST/$NODE_TAR" "$TMP/$NODE_TAR"
   rm -rf "$LOCAL_OPT/node" && mkdir -p "$LOCAL_OPT/node"
@@ -958,7 +1185,7 @@ node_ok || warn "Node.js >= 18 not found, JS-based LSPs (pyright, ts_ls...) will
 # ---------- tree-sitter CLI (nvim-treesitter uses it to compile parsers) ----------
 if [ "$NEED_TS" = 1 ] && has npm; then
   # npm package in ~/.local/opt/tree-sitter-cli; works with any Node.js, no global install
-  log "Installing tree-sitter CLI ${TS_LATEST:-latest} in ~/.local/opt/tree-sitter-cli"
+  step "Installing tree-sitter CLI ${TS_LATEST:-latest} in ~/.local/opt/tree-sitter-cli"
   npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" "tree-sitter-cli@${TS_LATEST#v}" >/dev/null 2>&1 \
     || npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" tree-sitter-cli@latest >/dev/null
   ln -sf "$LOCAL_OPT/tree-sitter-cli/node_modules/.bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
@@ -966,7 +1193,7 @@ if [ "$NEED_TS" = 1 ] && has npm; then
   # The prebuilt binary needs glibc 2.39. On older systems (Debian 12, RHEL 9, Ubuntu 22.04)
   # it fails with "GLIBC_2.39 not found", so build it from source with cargo instead.
   if ! ts_works "$LOCAL_BIN/tree-sitter"; then
-    log "tree-sitter binary needs newer glibc, building from source with cargo (takes a few minutes)"
+    step "tree-sitter binary needs newer glibc, building from source with cargo (takes a few minutes)"
     if ! has cargo && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
       fetch https://sh.rustup.rs "$TMP/rustup.sh"
       sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null
@@ -993,7 +1220,7 @@ fi
 # this step finished). That is the same glibc 2.39 build, so remove it if it cannot run here.
 MASON_DIR="$DATA_HOME/nvim/mason"
 if [ -e "$MASON_DIR/bin/tree-sitter" ] && ! "$MASON_DIR/bin/tree-sitter" --version >/dev/null 2>&1; then
-  log "Removing Mason's tree-sitter-cli (cannot run on this system)"
+  step "Removing Mason's tree-sitter-cli (cannot run on this system)"
   rm -rf "$MASON_DIR/packages/tree-sitter-cli" "$MASON_DIR/bin/tree-sitter"
 fi
 
@@ -1002,9 +1229,10 @@ fi
 if [ "$NEED_LG" = 1 ] && [ -z "$LG_LATEST" ]; then LG_LATEST="$(gh_latest jesseduffield/lazygit)"; fi
 if [ "$NEED_LG" = 1 ]; then
   if [ -z "$LG_LATEST" ]; then
+    step "Installing lazygit"
     failed "lazygit (could not look up the latest release)"
   else
-    log "Installing lazygit $LG_LATEST in ~/.local/bin"
+    step "Installing lazygit $LG_LATEST in ~/.local/bin"
     case "$ARCH" in amd64) a=x86_64 ;; arm64) a=arm64 ;; esac
     if fetch_once "https://github.com/jesseduffield/lazygit/releases/download/$LG_LATEST/lazygit_${LG_LATEST#v}_Linux_$a.tar.gz" "$TMP/lazygit.tgz" \
        && tar -C "$TMP" -xzf "$TMP/lazygit.tgz" lazygit && mv -f "$TMP/lazygit" "$LOCAL_BIN/lazygit"; then
@@ -1019,11 +1247,11 @@ fi
 # uv installs into ~/.local/bin; `uv python install --default` adds python3 there too, so
 # Mason's Python tools (and the user) get a recent Python with venv and pip, no sudo needed.
 if [ "$NEED_UV" = 1 ] && [ -n "$UV_CUR" ]; then
-  log "Updating uv to ${UV_LATEST:-latest}"
+  step "Updating uv to ${UV_LATEST:-latest}"
   if "$LOCAL_BIN/uv" self update -q; then did "uv $("$LOCAL_BIN/uv" --version | awk '{print $2}') (was $UV_CUR)"
   else failed "uv update"; fi
 elif [ "$NEED_UV" = 1 ]; then
-  log "Installing uv ${UV_LATEST:-latest} in ~/.local/bin"
+  step "Installing uv ${UV_LATEST:-latest} in ~/.local/bin"
   fetch https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh "$TMP/uv-installer.sh"
   if env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$LOCAL_BIN" sh "$TMP/uv-installer.sh" --quiet && [ -x "$LOCAL_BIN/uv" ]; then
     did "uv $("$LOCAL_BIN/uv" --version | awk '{print $2}')"
@@ -1035,7 +1263,7 @@ hash -r
 if [ "$NEED_PY" = 1 ] && has uv; then
   # Without a version, uv picks the newest stable Python
   PY_ARG=(); [ -n "$PY_LATEST" ] && PY_ARG=("$PY_LATEST")
-  log "Installing Python ${PY_LATEST:-latest} with uv"
+  step "Installing Python ${PY_LATEST:-latest} with uv"
   # --default (adds python / python3 next to python3.X) is marked experimental; hide that warning
   if uv python install --default ${PY_ARG[@]+"${PY_ARG[@]}"} >"$TMP/uv-python.log" 2>&1 && [ -x "$LOCAL_BIN/python3" ]; then
     hash -r; v="$("$LOCAL_BIN/python3" --version | awk '{print $2}')"
@@ -1053,7 +1281,7 @@ if [ -f "$LAZY_LOCK" ]; then lock_commits "$LAZY_LOCK" > "$TMP/lock.before" || t
 else lock_commits "$OLD_DOTFILES/nvim/lazy-lock.json" > "$TMP/lock.before" 2>/dev/null || true; fi
 
 # ---------- dotfiles: copy this repo's config into place ----------
-log "Installing the config files"
+step "Installing the config files"
 if [ -n "$DOTFILES_DIR" ]; then
   SRC="$DOTFILES_DIR"
 else
@@ -1170,14 +1398,14 @@ done
 # ---------- nvim plugins, LSP servers, treesitter parsers (all headless) ----------
 # Everything is installed when missing and updated to the latest; each step is time-bounded.
 # Lazy sync: install missing plugins and update all of them to the latest commit
-log "Installing and updating nvim plugins (LazyVim, up to a minute)"
+step "Installing and updating nvim plugins (LazyVim, up to a minute)"
 # Lazy's per-plugin progress goes to a log (shown only on failure); the summary lists the
 # plugins whose commit changed (lockfile before vs after)
 if with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! sync" +qa </dev/null > "$TMP/lazy.log" 2>&1; then
   lock_commits "$LAZY_LOCK" > "$TMP/lock.after" || true
   n="$(wc -l < "$TMP/lock.after" | tr -d ' ')"
   m=0; [ -s "$TMP/lock.before" ] && m="$(LC_ALL=C join "$TMP/lock.before" "$TMP/lock.after" 2>/dev/null | awk '$2 != $3' | wc -l | tr -d ' ' || echo 0)"
-  echo "   $n plugins, $m updated"
+  note "$n plugins, $m updated"
   if [ -s "$TMP/lock.before" ]; then
     LC_ALL=C join "$TMP/lock.before" "$TMP/lock.after" | awk '$2 != $3 {print "nvim plugin " $1 " " $2 " -> " $3}' > "$TMP/plugins.done"
     LC_ALL=C join -v 2 "$TMP/lock.before" "$TMP/lock.after" | awk '{print "nvim plugin " $1 " new " $2}' >> "$TMP/plugins.done"
@@ -1188,7 +1416,7 @@ else
   failed "nvim plugins (Lazy sync failed or timed out, run :Lazy sync)"
 fi
 
-log "Installing and updating LSP servers, formatters and treesitter parsers"
+step "Installing and updating LSP servers, formatters and treesitter parsers"
 # CFLAGS: tree-sitter's default flags include -Wall, which makes gcc 12.2 (Debian 12) spend
 # minutes on large generated parsers such as gitcommit. config/options.lua sets the same default.
 export CFLAGS="${CFLAGS:--O2}"
@@ -1209,19 +1437,19 @@ else
   # Mason's own log has the full reason for each failure
   MASON_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/nvim/mason.log"
   if [ -f "$MASON_LOG" ]; then
-    warn "last Mason errors ($MASON_LOG):"
+    note "Mason's own log: $MASON_LOG"
     grep -i 'error\|fail' "$MASON_LOG" | tail -n 5 | cut -c1-300 >&2 || true
   fi
 fi
 
 # ---------- Terminal: Nerd Font, Ghostty, iTerm2 ----------
 if [ "$NEED_FONT" = 1 ] && [ "$PM" = brew ]; then
-  log "Installing JetBrainsMono Nerd Font"
+  step "Installing JetBrainsMono Nerd Font"
   if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask font-jetbrains-mono-nerd-font >/dev/null 2>&1; then
     did "JetBrainsMono Nerd Font"
   else failed "JetBrainsMono Nerd Font (brew install --cask font-jetbrains-mono-nerd-font)"; fi
 elif [ "$NEED_FONT" = 1 ]; then
-  log "Installing JetBrainsMono Nerd Font ${FONT_VER:-latest} in ~/.local/share/fonts"
+  step "Installing JetBrainsMono Nerd Font ${FONT_VER:-latest} in ~/.local/share/fonts"
   if [ -n "$FONT_VER" ]; then u="download/$FONT_VER"; else u="latest/download"; fi
   u="https://github.com/ryanoasis/nerd-fonts/releases/$u/JetBrainsMono.tar.xz"
   mkdir -p "$TMP/font"
@@ -1235,12 +1463,12 @@ elif [ "$NEED_FONT" = 1 ]; then
   else failed "JetBrainsMono Nerd Font ($u)"; fi
 fi
 if [ "$NEED_GHOSTTY" = 1 ]; then
-  log "Installing Ghostty"
+  step "Installing Ghostty"
   if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask ghostty >/dev/null 2>&1; then did "Ghostty (config: ~/.config/ghostty/config)"
   else failed "Ghostty (brew install --cask ghostty)"; fi
 fi
 if [ "$NEED_ITERM" = 1 ]; then
-  log "Setting up the iTerm2 profile"
+  step "Setting up the iTerm2 profile"
   mkdir -p "$ITERM_PROFILES"
   # A copy, not a link: iTerm2 reads the folder at start and when files in it change
   cp "$SRC/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"
@@ -1290,17 +1518,18 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
   fi
   # Native installer: updates itself in the background, so it is only run when claude is missing
   if [ "$NEED_CLAUDE" = 1 ] && [ -n "$CLAUDE_CUR" ]; then
-    log "Updating Claude Code to ${CLAUDE_LATEST:-latest}"
+    step "Updating Claude Code to ${CLAUDE_LATEST:-latest}"
     if claude update >/dev/null 2>&1; then did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}') (was $CLAUDE_CUR)"
     else failed "Claude Code update (run: claude update)"; fi
   elif [ "$NEED_CLAUDE" = 1 ]; then
-    log "Installing Claude Code ${CLAUDE_LATEST:-latest}"
+    step "Installing Claude Code ${CLAUDE_LATEST:-latest}"
     fetch https://claude.ai/install.sh "$TMP/claude-install.sh"
     bash "$TMP/claude-install.sh"
     . "$STATE_DIR/env.sh"; hash -r
     has claude && did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}')"
   fi
   if has claude; then
+    step "Adding Claude Code plugins"
     # The official marketplace is only registered by the first interactive session, so add it here
     MP=claude-plugins-official
     claude plugin marketplace add "anthropics/$MP" >/dev/null 2>&1 || true
@@ -1350,44 +1579,82 @@ if [ "$RM_OLD" = 1 ]; then
   rm -rf "${HOME:?}/dotfiles" && did "removed the old ~/dotfiles (no longer used)"
 fi
 
-# ---------- Summary ----------
-if [ ${#SYS_DONE[@]} -gt 0 ] || [ ${#DONE[@]} -gt 0 ]; then
-  log "Installed:"
-  if [ ${#SYS_DONE[@]} -gt 0 ]; then
-    echo "   System, for every user:"; printf '     %s\n' "${SYS_DONE[@]}"
-  fi
-  if [ ${#DONE[@]} -gt 0 ]; then
-    echo "   Only you, in ~:"; printf '     %s\n' "${DONE[@]}"
-  fi
-else
-  log "Nothing new was installed"
-fi
-if [ ${#FAILED[@]} -gt 0 ]; then
-  warn "Not installed:"
-  printf '   %s\n' "${FAILED[@]}" >&2
-fi
-# ---------- Next steps (printed on every run, so nothing is forgotten) ----------
-log "Done. Next steps:"
-echo "   - Open a new shell, then run nvim and tmux (:checkhealth and :Mason show the details)"
-[ "${DOCKER_RELOGIN:-0}" = 1 ] && echo "   - Docker: log out and back in (or run: newgrp docker), then docker runs without sudo"
-[ "${DOCKER_NO_SERVICE:-0}" = 1 ] && echo "   - Docker: no systemd here, so the daemon was not started (run: sudo dockerd &)"
-[ "$NEED_DOCKER" = 1 ] && [ "$PM" = brew ] && echo "   - Docker: open Docker Desktop once (Applications) to finish its setup"
+# ---------- Next steps (on every run, so nothing is forgotten) ----------
+NEXT=("Open a new shell, then run nvim or tmux (:checkhealth and :Mason show the details)")
+[ "${DOCKER_RELOGIN:-0}" = 1 ] && NEXT+=("Docker: log out and back in (or run: newgrp docker), then docker runs without sudo")
+[ "${DOCKER_NO_SERVICE:-0}" = 1 ] && NEXT+=("Docker: no systemd here, so the daemon was not started (run: sudo dockerd &)")
+[ "$NEED_DOCKER" = 1 ] && [ "$PM" = brew ] && NEXT+=("Docker: open Docker Desktop once (Applications) to finish its setup")
 if [ "$INSTALL_CLAUDE" = 1 ] && has claude; then
-  [ "$NEED_CLAUDE" = 1 ] && [ -z "$CLAUDE_CUR" ] && echo "   - Run claude (or tmux prefix + A) and log in"
+  [ "$NEED_CLAUDE" = 1 ] && [ -z "$CLAUDE_CUR" ] && NEXT+=("Run claude (or tmux prefix + A) and log in")
   # MCP servers (plugin tools, claude.ai connectors) that still need a sign-in. `claude mcp list`
   # connects to each one, so it is bounded; run from ~ so no project's .mcp.json is involved.
+  step "Checking which Claude tools need a sign-in"
   v="$(cd "$HOME" && timeout_cmd 60 claude mcp list 2>/dev/null || true)"
   v="$(printf '%s\n' "$v" | grep -i 'auth' | sed 's/: .*//' | tr -d '\r' || true)"
   must="$(printf '%s\n' "$v" | grep -v '^plugin:design:' | grep -v '^$' | tr '\n' ' ' || true)"
   opt="$(printf '%s\n' "$v" | sed -n 's/^plugin:design://p' | tr '\n' ' ' || true)"
   if [ -n "$must" ]; then
-    echo "   - In claude, run /mcp and sign in to: $must"
-    case "$must" in *claude.ai*) echo "     (claude.ai ... entries are connectors from your claude.ai account: reconnect or remove them there)" ;; esac
+    NEXT+=("In claude, run /mcp and sign in to: $must")
+    case "$must" in *claude.ai*) NEXT+=("  (claude.ai ... entries are connectors from your claude.ai account: reconnect or remove them there)") ;; esac
   fi
   if [ -n "$opt" ]; then
-    echo "   - Optional, only if you use them with the design plugin: $opt"
-    echo "     (or turn them off: /mcp, pick one, Disable; this is saved per project)"
+    NEXT+=("Optional, only if you use them with the design plugin: $opt (or /mcp, pick one, Disable)")
   fi
 fi
+step_end
+
+# ---------- Summary ----------
+if [ "$UI" = 1 ]; then
+  el=$((SECONDS - ${RUN_T0:-0})); el="$((el / 60))m$((el % 60))s"
+  # nvim plugin and Mason updates are counted here; the full list is in the log
+  sum_rows() { # sum_rows ROW...
+    local r np=0 nm=0
+    for r in "$@"; do
+      case "$r" in
+        "nvim plugin "*) np=$((np + 1)) ;;
+        "Mason "*) nm=$((nm + 1)) ;;
+        *) case "$r" in
+             *" (was "*) printf '    %s%s%s %s\n' "$Y" "$S_UP" "$N" "${r/ (was / ${D}(was }$N" >&3 ;;
+             *" -> "*) printf '    %s%s%s %s\n' "$Y" "$S_UP" "$N" "${r/ -> / $S_TO }" >&3 ;;
+             *) printf '    %s%s%s %s\n' "$G" "$S_NEW" "$N" "$r" >&3 ;;
+           esac ;;
+      esac
+    done
+    [ "$np" -gt 0 ] && printf '    %s%s%s nvim plugins: %d changed %s(list in the log)%s\n' "$Y" "$S_UP" "$N" "$np" "$D" "$N" >&3
+    [ "$nm" -gt 0 ] && printf '    %s%s%s LSP servers and tools (Mason): %d changed %s(list in the log)%s\n' "$Y" "$S_UP" "$N" "$nm" "$D" "$N" >&3
+    return 0
+  }
+  if [ ${#FAILED[@]} -gt 0 ]; then
+    printf '\n  %s%s Done with problems%s %s(%s)%s\n' "$B$Y" "$S_WARN" "$N" "$D" "$el" "$N" >&3
+  else
+    printf '\n  %s%s Done%s %s(%s)%s\n' "$B$G" "$S_OK" "$N" "$D" "$el" "$N" >&3
+  fi
+  if [ ${#SYS_DONE[@]} -gt 0 ]; then printf '\n  %sSystem%s\n' "$B" "$N" >&3; sum_rows "${SYS_DONE[@]}"; fi
+  if [ ${#DONE[@]} -gt 0 ]; then printf '\n  %sYou%s\n' "$B" "$N" >&3; sum_rows "${DONE[@]}"; fi
+  if [ ${#SYS_DONE[@]} -eq 0 ] && [ ${#DONE[@]} -eq 0 ]; then printf '  %sNothing new was installed.%s\n' "$D" "$N" >&3; fi
+  if [ ${#FAILED[@]} -gt 0 ]; then
+    printf '\n  %sNot installed%s\n' "$B$R" "$N" >&3
+    for r in "${FAILED[@]}"; do printf '    %s%s%s %s\n' "$R" "$S_BAD" "$N" "$r" >&3; done
+  fi
+  printf '\n  %sNext%s\n' "$B" "$N" >&3
+  i=1; for r in "${NEXT[@]}"; do
+    case "$r" in "  "*) printf '       %s%s%s\n' "$D" "${r#  }" "$N" >&3 ;; *) printf '    %d. %s\n' "$i" "$r" >&3; i=$((i + 1)) ;; esac
+  done
+  printf '\n  %sFull log: %s%s\n\n' "$D" "$INSTALL_LOG" "$N" >&3
+fi
+# plain output, and the complete list for the log
+if [ ${#SYS_DONE[@]} -gt 0 ] || [ ${#DONE[@]} -gt 0 ]; then
+  echo "==> Installed:"
+  if [ ${#SYS_DONE[@]} -gt 0 ]; then echo "   System, for every user:"; printf '     %s\n' "${SYS_DONE[@]}"; fi
+  if [ ${#DONE[@]} -gt 0 ]; then echo "   Only you, in ~:"; printf '     %s\n' "${DONE[@]}"; fi
+else
+  echo "==> Nothing new was installed"
+fi
+if [ ${#FAILED[@]} -gt 0 ]; then
+  echo "!! Not installed:" >&2
+  printf '   %s\n' "${FAILED[@]}" >&2
+fi
+echo "==> Done. Next steps:"
+for r in "${NEXT[@]}"; do case "$r" in "  "*) echo "     ${r#  }" ;; *) echo "   - $r" ;; esac; done
 exit 0
 }
