@@ -193,7 +193,8 @@
         "Blue Component": 0.658824,
         "Alpha Component": 1,
         "Color Space": "sRGB"
-      }
+      },
+      "Disable Window Resizing": true
     }
   ]
 }
