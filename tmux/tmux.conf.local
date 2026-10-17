@@ -410,6 +410,10 @@ tmux_conf_urlscan_options="--compact --dedupe"
 #set -g status-keys vi
 #set -g mode-keys vi
 
+# Let programs inside tmux (nvim over SSH, ...) set the clipboard of the terminal you are in
+# with OSC 52; tmux passes it on to iTerm2 / Ghostty / WezTerm / kitty
+set -s set-clipboard on
+
 # replace C-b by C-a instead of using both prefixes
 # set -gu prefix2
 # unbind C-a
