@@ -18,7 +18,7 @@ It first shows a plan with versions and asks once. Run it again to update.
 
 ## Terminal
 
-- **iTerm2** (macOS): a profile with Catppuccin Mocha, JetBrainsMono Nerd Font and Option as Alt, made the default; restart iTerm2.
+- **iTerm2** (macOS): a profile with Catppuccin Mocha, JetBrainsMono Nerd Font and Option as Alt, made the default, and the Minimal theme (title bar in the terminal's colour, if you never picked a theme); restart iTerm2.
 - **Ghostty**: `ghostty/config` with the same theme. Unlike iTerm2 it shows images inside nvim, also over SSH and in tmux.
 - On macOS both are set up when installed; Ghostty is installed only when you run the installer in it.
 - **Font**: JetBrainsMono Nerd Font is installed on macOS and on a Linux desktop. Servers you ssh into need none: your own terminal draws the text. Elsewhere, pick a [Nerd Font](https://www.nerdfonts.com) in your terminal, or icons show as boxes.

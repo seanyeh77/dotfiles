@@ -678,6 +678,13 @@ if [ "$USE_ITERM" = 1 ] && ! cmp -s "$DOTFILES_DIR/iterm2/dotfiles.json" "$ITERM
   NEED_ITERM=1
   user_plan "iTerm2 profile" "Catppuccin Mocha, Nerd Font, Option as Alt; set as default, clipboard access on"
 fi
+# iTerm2's Minimal theme: the title bar and tabs take the terminal's background colour, as in
+# Ghostty. Only when the theme was never chosen (Settings > Appearance > Theme), so a choice is kept.
+NEED_ITERM_THEME=0
+if [ "$USE_ITERM" = 1 ] && ! defaults read com.googlecode.iterm2 TabStyleWithAutomaticOption >/dev/null 2>&1; then
+  NEED_ITERM_THEME=1
+  user_plan "iTerm2 theme" "Minimal (title bar in the terminal's colour)"
+fi
 
 if [ ${#SYS_PLAN[@]} -eq 0 ] && [ ${#USER_PLAN[@]} -eq 0 ]; then
   log "Everything is installed and up to date"
@@ -1062,6 +1069,12 @@ if [ "$NEED_ITERM" = 1 ]; then
   defaults write com.googlecode.iterm2 "Default Bookmark Guid" -string "$ITERM_GUID"
   defaults write com.googlecode.iterm2 AllowClipboardAccess -bool true
   did "iTerm2 profile 'Dotfiles (Catppuccin Mocha)' (default; restart iTerm2 to use it)"
+fi
+if [ "$NEED_ITERM_THEME" = 1 ]; then
+  # 5 = Minimal (0 Light, 1 Dark, 4 Automatic, 6 Compact)
+  if defaults write com.googlecode.iterm2 TabStyleWithAutomaticOption -int 5; then
+    did "iTerm2 theme Minimal (restart iTerm2 to use it)"
+  else failed "iTerm2 theme"; fi
 fi
 
 # ---------- Claude Code (optional, see the questions at the top) ----------
