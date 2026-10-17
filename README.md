@@ -15,7 +15,8 @@ Before changing anything it shows a plan with versions and asks once: system cha
 - **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine and WSL, on amd64 or arm64
 - **Per user**: Neovim, Node.js, tree-sitter, [uv](https://docs.astral.sh/uv/) and Python go in `~/.local`; sudo is only asked for missing OS packages (git, tmux, compilers, ripgrep)
 - **Font**: use a [Nerd Font](https://www.nerdfonts.com) in your local terminal, or icons show as boxes
-- **Terminal** (macOS): only the terminal you run the installer in is set up. In **iTerm2**: JetBrainsMono Nerd Font and an iTerm2 profile (Catppuccin Mocha, Option as Alt, clipboard access) made the default; restart iTerm2. In **Ghostty**: the font and `ghostty/config` (same theme; unlike iTerm2 it shows images inside nvim, also over SSH and in tmux). From another terminal, whichever of the two is installed is set up. `DOTFILES_TERMINAL=ghostty|iterm2|none` picks one (`ghostty` installs it if missing)
+- **Terminal** (macOS): iTerm2 and Ghostty, whichever are installed (Ghostty is installed only when you run the installer in it). **iTerm2**: JetBrainsMono Nerd Font and a profile (Catppuccin Mocha, Option as Alt, clipboard access) made the default; restart iTerm2. **Ghostty**: the font and `ghostty/config` (same theme; unlike iTerm2 it shows images inside nvim, also over SSH and in tmux; installs its terminfo on hosts you ssh to). `DOTFILES_TERMINAL=ghostty|iterm2|none` sets up only that one
+- **`sshk host`**: ssh that first copies your SSH key to the host if needed, so later logins need no password
 - **Claude Code**: the installer asks whether to install it and which plugins to add (press Enter for all), and remembers the answers; `DOTFILES_ASK=1` asks again:
   - Workflow: commit-commands, code-review, feature-dev, security-guidance, code-simplifier, claude-md-management, superpowers, context7
   - Frontend: frontend-design, playwright, design, vercel-react-best-practices

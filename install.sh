@@ -609,9 +609,10 @@ fi
 ITERM_PROFILES="$HOME/Library/Application Support/iTerm2/DynamicProfiles"
 ITERM_GUID="3d9b7f2a-6c1e-4b8e-9f2d-5e7a0c1d2b3f"
 NEED_FONT=0; NEED_ITERM=0; NEED_GHOSTTY=0
-# Set up only the terminal this is running in: TERM_PROGRAM (LC_TERMINAL / GHOSTTY_RESOURCES_DIR
-# still tell inside tmux). Elsewhere (Terminal.app, SSH) set up whichever one is installed.
-# DOTFILES_TERMINAL=iterm2|ghostty forces one (ghostty is installed if missing); =none skips both.
+# Set up the terminal this is running in (TERM_PROGRAM; LC_TERMINAL / GHOSTTY_RESOURCES_DIR still
+# tell inside tmux) and any other of the two that is installed; Ghostty is only installed when it
+# is the one running or asked for. DOTFILES_TERMINAL=iterm2|ghostty sets up only that one
+# (ghostty is installed if missing); =none skips both.
 TERM_APP=""
 if [ "$OS" = Darwin ]; then
   case "${DOTFILES_TERMINAL:-}" in
@@ -628,11 +629,11 @@ USE_ITERM=0; USE_GHOSTTY=0
 case "$TERM_APP" in
   iterm2) USE_ITERM=1 ;;
   ghostty) USE_GHOSTTY=1 ;;
-  "") if [ "$OS" = Darwin ]; then
-        [ -d /Applications/iTerm.app ] && USE_ITERM=1
-        [ -d /Applications/Ghostty.app ] && USE_GHOSTTY=1
-      fi ;;
 esac
+if [ "$OS" = Darwin ] && [ -z "${DOTFILES_TERMINAL:-}" ]; then
+  [ -d /Applications/iTerm.app ] && USE_ITERM=1
+  [ -d /Applications/Ghostty.app ] && USE_GHOSTTY=1
+fi
 [ "${NO_ITERM:-0}" = 1 ] && USE_ITERM=0
 [ "${NO_GHOSTTY:-0}" = 1 ] && USE_GHOSTTY=0
 if [ "$USE_GHOSTTY" = 1 ] && [ ! -d /Applications/Ghostty.app ]; then
