@@ -867,6 +867,13 @@ elif [ "$DOCKER_TODO" = group ]; then
   NEED_DOCKER_GROUP=1; NEED_SYS=1
 fi
 [ "$NEED_DOCKER_GROUP" = 1 ] && sys_plan "docker group" "add $(id -un), to run docker without sudo (takes effect at your next login)"
+# ~/.npm with files owned by root (left by an earlier `sudo npm ...`): npm, and so Mason's
+# npm-based LSP servers, fail with EACCES until it belongs to you again
+NPM_FIX=0
+if [ "$(id -u)" -ne 0 ] && [ -d "$HOME/.npm" ] && [ -n "$(find "$HOME/.npm" ! -user "$(id -u)" -print 2>/dev/null | head -n 1 || true)" ]; then
+  NPM_FIX=1; NEED_SYS=1
+  sys_plan "~/.npm" "has files owned by root (from an earlier sudo npm): sudo chown them back to you"
+fi
 [ "$OLD_TS_LINK" = 1 ] && sys_plan "old link" "rm /usr/local/bin/tree-sitter (points into one user's ~/.cargo)"
 [ "$NEED_NVIM" = 1 ]     && user_plan "Neovim" "$(change "$NVIM_CUR" "$NVIM_LATEST" "~/.local/opt/nvim")"
 [ "$NEED_NODE" = 1 ]     && user_plan "Node.js (LTS)" "$(change "$NODE_CUR" "$NODE_LATEST" "~/.local/opt/node")"
@@ -1222,6 +1229,14 @@ if [ "$NEED_TS" = 1 ] && has npm; then
     v="v$("$LOCAL_BIN/tree-sitter" --version | awk '{print $2}')"
     if [ -n "$TS_CUR" ]; then did "tree-sitter CLI $v (was $TS_CUR)"; else did "tree-sitter CLI $v"; fi
   else failed "tree-sitter CLI"; fi
+fi
+if [ "$NPM_FIX" = 1 ]; then
+  step "Giving ~/.npm back to you"
+  if [ "$SUDO_OK" = 1 ] && on_screen sudo chown -R "$(id -u):$(id -g)" "$HOME/.npm"; then
+    sys_did "~/.npm belongs to you again (npm and Mason can write to it)"
+  else
+    failed "npm cache ~/.npm is owned by root, so npm-based LSP servers fail (run: sudo chown -R $(id -un) ~/.npm)"
+  fi
 fi
 if [ "$OLD_TS_LINK" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   sudo rm -f /usr/local/bin/tree-sitter && sys_did "removed old link /usr/local/bin/tree-sitter"
