@@ -15,6 +15,7 @@ Before changing anything it shows a plan with versions and asks once: system cha
 - **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine and WSL, on amd64 or arm64
 - **Per user**: Neovim, Node.js, tree-sitter, [uv](https://docs.astral.sh/uv/) and Python go in `~/.local`; sudo is only asked for missing OS packages (git, tmux, compilers, ripgrep)
 - **Font**: use a [Nerd Font](https://www.nerdfonts.com) in your local terminal, or icons show as boxes
+- **iTerm2** (macOS): the installer adds JetBrainsMono Nerd Font and an iTerm2 profile (Catppuccin Mocha, Option as Alt, clipboard access) and makes it the default; restart iTerm2 to use it. `NO_ITERM=1` skips this
 - **Claude Code**: the installer asks whether to install it and which plugins to add (press Enter for all), and remembers the answers; `DOTFILES_ASK=1` asks again:
   - Workflow: commit-commands, code-review, feature-dev, security-guidance, code-simplifier, claude-md-management, superpowers, context7
   - Frontend: frontend-design, playwright, design, vercel-react-best-practices

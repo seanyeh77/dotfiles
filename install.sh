@@ -592,6 +592,23 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
   fi
 fi
 
+# macOS + iTerm2: a Nerd Font and this repo's iTerm2 profile (iterm2/dotfiles.json, a Dynamic
+# Profile: Catppuccin Mocha, JetBrainsMono Nerd Font, Option as Alt), set as the default profile,
+# plus clipboard access for programs in the terminal (tmux / nvim copy over SSH)
+ITERM_PROFILES="$HOME/Library/Application Support/iTerm2/DynamicProfiles"
+ITERM_GUID="3d9b7f2a-6c1e-4b8e-9f2d-5e7a0c1d2b3f"
+NEED_FONT=0; NEED_ITERM=0
+if [ "$OS" = Darwin ] && [ -d /Applications/iTerm.app ] && [ "${NO_ITERM:-0}" != 1 ]; then
+  NEED_FONT=1
+  for f in "$HOME"/Library/Fonts/JetBrainsMonoNerdFont* /Library/Fonts/JetBrainsMonoNerdFont*; do
+    [ -e "$f" ] && { NEED_FONT=0; break; }
+  done
+  if [ ! -f "$ITERM_PROFILES/dotfiles.json" ] || [ ! -f "$DOTFILES_DIR/iterm2/dotfiles.json" ] \
+     || ! cmp -s "$DOTFILES_DIR/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"; then NEED_ITERM=1; fi
+  [ "$NEED_FONT" = 1 ] && user_plan "JetBrainsMono Nerd Font" "new, brew install --cask (icons in nvim)"
+  [ "$NEED_ITERM" = 1 ] && user_plan "iTerm2 profile" "Catppuccin Mocha, Nerd Font, Option as Alt; set as default, clipboard access on"
+fi
+
 if [ ${#SYS_PLAN[@]} -eq 0 ] && [ ${#USER_PLAN[@]} -eq 0 ]; then
   log "Everything is installed and up to date"
 else
@@ -912,6 +929,25 @@ else
     warn "last Mason errors ($MASON_LOG):"
     grep -i 'error\|fail' "$MASON_LOG" | tail -n 5 | cut -c1-300 >&2 || true
   fi
+fi
+
+# ---------- iTerm2 (macOS) ----------
+if [ "$NEED_FONT" = 1 ]; then
+  log "Installing JetBrainsMono Nerd Font"
+  if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask font-jetbrains-mono-nerd-font >/dev/null 2>&1; then
+    did "JetBrainsMono Nerd Font"
+  else failed "JetBrainsMono Nerd Font (brew install --cask font-jetbrains-mono-nerd-font)"; fi
+fi
+if [ "$NEED_ITERM" = 1 ]; then
+  log "Setting up the iTerm2 profile"
+  mkdir -p "$ITERM_PROFILES"
+  # A copy, not a link: iTerm2 reads the folder at start and when files in it change
+  cp "$DOTFILES_DIR/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"
+  # Default profile for new windows, and let programs (tmux, nvim over SSH) set the clipboard.
+  # iTerm2 saves its settings when it quits, so these apply after iTerm2 restarts.
+  defaults write com.googlecode.iterm2 "Default Bookmark Guid" -string "$ITERM_GUID"
+  defaults write com.googlecode.iterm2 AllowClipboardAccess -bool true
+  did "iTerm2 profile 'Dotfiles (Catppuccin Mocha)' (default; restart iTerm2 to use it)"
 fi
 
 # ---------- Claude Code (optional, see the questions at the top) ----------
