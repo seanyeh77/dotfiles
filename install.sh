@@ -609,19 +609,44 @@ fi
 ITERM_PROFILES="$HOME/Library/Application Support/iTerm2/DynamicProfiles"
 ITERM_GUID="3d9b7f2a-6c1e-4b8e-9f2d-5e7a0c1d2b3f"
 NEED_FONT=0; NEED_ITERM=0; NEED_GHOSTTY=0
-# Ghostty (macOS): shows images inside nvim (kitty graphics protocol); config in ghostty/config
-if [ "$OS" = Darwin ] && [ ! -d /Applications/Ghostty.app ] && [ "${NO_GHOSTTY:-0}" != 1 ]; then
+# Set up only the terminal this is running in: TERM_PROGRAM (LC_TERMINAL / GHOSTTY_RESOURCES_DIR
+# still tell inside tmux). Elsewhere (Terminal.app, SSH) set up whichever one is installed.
+# DOTFILES_TERMINAL=iterm2|ghostty forces one (ghostty is installed if missing); =none skips both.
+TERM_APP=""
+if [ "$OS" = Darwin ]; then
+  case "${DOTFILES_TERMINAL:-}" in
+    iterm*|iTerm*) TERM_APP=iterm2 ;;
+    ghostty|Ghostty) TERM_APP=ghostty ;;
+    none) TERM_APP=none ;;
+    *)
+      if [ "${TERM_PROGRAM:-}" = iTerm.app ] || [ "${LC_TERMINAL:-}" = iTerm2 ]; then TERM_APP=iterm2
+      elif [ "${TERM_PROGRAM:-}" = ghostty ] || [ -n "${GHOSTTY_RESOURCES_DIR:-}" ]; then TERM_APP=ghostty
+      fi ;;
+  esac
+fi
+USE_ITERM=0; USE_GHOSTTY=0
+case "$TERM_APP" in
+  iterm2) USE_ITERM=1 ;;
+  ghostty) USE_GHOSTTY=1 ;;
+  "") if [ "$OS" = Darwin ]; then
+        [ -d /Applications/iTerm.app ] && USE_ITERM=1
+        [ -d /Applications/Ghostty.app ] && USE_GHOSTTY=1
+      fi ;;
+esac
+[ "${NO_ITERM:-0}" = 1 ] && USE_ITERM=0
+[ "${NO_GHOSTTY:-0}" = 1 ] && USE_GHOSTTY=0
+if [ "$USE_GHOSTTY" = 1 ] && [ ! -d /Applications/Ghostty.app ]; then
   NEED_GHOSTTY=1
   user_plan "Ghostty" "new, brew install --cask (terminal that shows images in nvim)"
 fi
-if [ "$OS" = Darwin ]; then
+if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then
   NEED_FONT=1
   for f in "$HOME"/Library/Fonts/JetBrainsMonoNerdFont* /Library/Fonts/JetBrainsMonoNerdFont*; do
     [ -e "$f" ] && { NEED_FONT=0; break; }
   done
   [ "$NEED_FONT" = 1 ] && user_plan "JetBrainsMono Nerd Font" "new, brew install --cask (icons in nvim)"
 fi
-if [ "$OS" = Darwin ] && [ -d /Applications/iTerm.app ] && [ "${NO_ITERM:-0}" != 1 ]; then
+if [ "$USE_ITERM" = 1 ]; then
   if [ ! -f "$ITERM_PROFILES/dotfiles.json" ] || [ ! -f "$DOTFILES_DIR/iterm2/dotfiles.json" ] \
      || ! cmp -s "$DOTFILES_DIR/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"; then NEED_ITERM=1; fi
   [ "$NEED_ITERM" = 1 ] && user_plan "iTerm2 profile" "Catppuccin Mocha, Nerd Font, Option as Alt; set as default, clipboard access on"
@@ -891,7 +916,9 @@ link() { # back up existing config instead of overwriting it
   ln -sfn "$src" "$dst"
 }
 link "$DOTFILES_DIR/nvim" "$HOME/.config/nvim"
-link "$DOTFILES_DIR/ghostty/config" "$HOME/.config/ghostty/config"
+if [ "$OS" != Darwin ] || [ "$USE_GHOSTTY" = 1 ]; then
+  link "$DOTFILES_DIR/ghostty/config" "$HOME/.config/ghostty/config"
+fi
 
 # tmux: Oh my tmux! (https://github.com/gpakosz/.tmux) plus this repo's tmux/tmux.conf.local
 if [ "$NEED_OMT" = 0 ]; then
