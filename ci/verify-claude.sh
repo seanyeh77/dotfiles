@@ -27,7 +27,8 @@ for p in "$@"; do
   case "$p" in
     skill:*)
       n="${p#skill:}"
-      [ -f "$HOME/.claude/skills/$n/SKILL.md" ]; check "skill $n" $? ;;
+      if [ -f "$HOME/.claude/skills/$n/SKILL.md" ]; then r=0; else r=1; fi
+      check "skill $n" $r ;;
     *)
       case "$list" in *"$p"*) r=0 ;; *) r=1 ;; esac
       check "plugin $p" $r ;;

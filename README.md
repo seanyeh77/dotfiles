@@ -2,7 +2,7 @@
 
 [![test](https://github.com/seanyeh77/dotfiles/actions/workflows/test.yml/badge.svg)](https://github.com/seanyeh77/dotfiles/actions/workflows/test.yml)
 
-Neovim ([LazyVim](https://www.lazyvim.org)) and tmux ([Oh my tmux!](https://github.com/gpakosz/.tmux)) in the Catppuccin theme, plus optional [Claude Code](https://code.claude.com/docs/en/overview).
+Neovim ([LazyVim](https://www.lazyvim.org)) and tmux ([Oh my tmux!](https://github.com/gpakosz/.tmux)) in the Catppuccin theme, terminal setup for iTerm2 and Ghostty, plus optional [Claude Code](https://code.claude.com/docs/en/overview).
 
 ## Install
 
@@ -10,18 +10,45 @@ Neovim ([LazyVim](https://www.lazyvim.org)) and tmux ([Oh my tmux!](https://gith
 curl -fsSL seanyeh77.github.io/dotfiles | bash
 ```
 
-Before changing anything it shows a plan with versions and asks once: system changes (OS packages, needs sudo, affects every user) are only made for missing packages, while your own tools in `~` (Neovim, Node.js LTS, tree-sitter, uv, Python, nvim plugins, LSP servers, Claude Code) are installed or updated to the latest release. Claude is never added as a co-author: Claude Code is set not to add `Co-Authored-By` or session links, and a global git `commit-msg` hook removes those lines from any commit (each repository's own hooks still run). Run it again to update.
+It first shows a plan with versions and asks once. Run it again to update.
 
-- **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine and WSL, on amd64 or arm64
-- **Per user**: Neovim, Node.js, tree-sitter, [uv](https://docs.astral.sh/uv/) and Python go in `~/.local`; sudo is only asked for missing OS packages (git, tmux, compilers, ripgrep)
-- **Font**: use a [Nerd Font](https://www.nerdfonts.com) in your local terminal, or icons show as boxes
-- **Terminal** (macOS): iTerm2 and Ghostty, whichever are installed (Ghostty is installed only when you run the installer in it). **iTerm2**: JetBrainsMono Nerd Font and a profile (Catppuccin Mocha, Option as Alt, clipboard access) made the default; restart iTerm2. **Ghostty**: the font and `ghostty/config` (same theme; unlike iTerm2 it shows images inside nvim, also over SSH and in tmux; over SSH servers see `TERM=xterm-256color`, so nothing is needed on them). `DOTFILES_TERMINAL=ghostty|iterm2|none` sets up only that one
-- **Font** (Linux desktop): JetBrainsMono Nerd Font goes into `~/.local/share/fonts` when you run the installer in a graphical session (not over SSH, WSL or Termux); pick it in your terminal's settings. Servers you only ssh into need no font. `DOTFILES_FONT=1|0` forces it on or off
-- **`sshk host`**: ssh that first copies your SSH key to the host if needed, so later logins need no password
-- **Claude Code**: the installer asks whether to install it and which plugins to add (press Enter for all), and remembers the answers; `DOTFILES_ASK=1` asks again:
-  - Workflow: commit-commands, code-review, feature-dev, security-guidance, code-simplifier, claude-md-management, superpowers, context7
-  - Frontend: frontend-design, playwright, design, vercel-react-best-practices
-  - At the end the installer lists the MCP servers that still need a sign-in (run `/mcp` in Claude), such as context7
+- **System** (sudo, every user): only missing OS packages such as git, tmux, compilers and ripgrep; installed ones are never upgraded. Without sudo rights this step is skipped.
+- **Only you** (`~`, no sudo): Neovim, Node.js LTS, tree-sitter, [uv](https://docs.astral.sh/uv/), Python, lazygit, nvim plugins, LSP servers and Claude Code, kept at the latest release.
+- **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine, WSL and Termux, on amd64 or arm64.
+
+## Terminal
+
+- **iTerm2** (macOS): a profile with Catppuccin Mocha, JetBrainsMono Nerd Font and Option as Alt, made the default; restart iTerm2.
+- **Ghostty**: `ghostty/config` with the same theme. Unlike iTerm2 it shows images inside nvim, also over SSH and in tmux.
+- On macOS both are set up when installed; Ghostty is installed only when you run the installer in it.
+- **Font**: JetBrainsMono Nerd Font is installed on macOS and on a Linux desktop. Servers you ssh into need none: your own terminal draws the text. Elsewhere, pick a [Nerd Font](https://www.nerdfonts.com) in your terminal, or icons show as boxes.
+- **Over SSH**: copying in nvim and tmux reaches your local clipboard (OSC 52), and Ghostty presents itself as `xterm-256color`, so servers need no setup.
+
+## Claude Code
+
+The installer asks whether to install it and which plugins to add (Enter for all), and remembers the answers.
+
+- Workflow: commit-commands, code-review, feature-dev, security-guidance, code-simplifier, claude-md-management, superpowers, context7
+- Frontend: frontend-design, playwright, design, vercel-react-best-practices
+- Language-server plugins for the languages nvim supports
+- Claude is never added as a co-author: Claude Code is set not to add `Co-Authored-By` or session links, and a global git `commit-msg` hook removes those lines from any commit (each repository's own hooks still run).
+- At the end the installer lists the MCP servers that still need a sign-in (run `/mcp` in Claude).
+
+## Options
+
+Set them before `bash`, e.g. `curl -fsSL seanyeh77.github.io/dotfiles | DOTFILES_ASK=1 bash`.
+
+| Variable | Effect |
+| --- | --- |
+| `DOTFILES_ASK=1` | Ask the Claude Code questions again |
+| `INSTALL_CLAUDE=1\|0`, `CLAUDE_PLUGINS="a b"` | Answer them up front |
+| `ASSUME_YES=1` | Do not ask before installing |
+| `NO_SUDO=1` / `USE_SUDO=1` | Never use sudo / ask for the sudo password even if you are not in an admin group |
+| `PYTHON_VERSION=3.13` | Pin Python instead of the latest |
+| `DOTFILES_TERMINAL=iterm2\|ghostty\|none` | Set up only that terminal (`ghostty` installs it if missing) |
+| `NO_ITERM=1` / `NO_GHOSTTY=1` | Skip one terminal |
+| `DOTFILES_FONT=1\|0` | Install the Nerd Font or not |
+| `DOTFILES_DIR` | Where the repo goes (default `~/dotfiles`) |
 
 ## Neovim
 
@@ -58,4 +85,13 @@ The prefix is `Ctrl-a`.
 | `C-a h/j/k/l` | Move between panes |
 | `C-a +` | Maximize the pane |
 | `C-a c` / `C-a n` | New / next window |
+| `C-a [` | Copy mode: `v` to select, `y` to copy |
 | `C-a A` | Open Claude Code, connected to the nvim in the same folder |
+
+## Shell
+
+`shell/env.sh` is loaded from `~/.bashrc` and `~/.zshrc`. It puts `~/.local/bin` and Mason's tools on `PATH`, loads Ghostty's shell integration, and adds:
+
+| Command | Action |
+| --- | --- |
+| `sshk host` | ssh, but first copy your SSH key to the host if needed, so later logins need no password |

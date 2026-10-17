@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2088 # "~/..." in messages is meant literally
 # One-command installer for a Neovim + tmux development environment.
-#   OS:   macOS, Debian/Ubuntu, Fedora/RHEL/Rocky, Arch, openSUSE, Alpine, WSL
+#   OS:   macOS, Debian/Ubuntu, Fedora/RHEL/Rocky, Arch, openSUSE, Alpine, WSL, Termux
 #   Arch: amd64 / arm64
 # Usage:      curl -fsSL seanyeh77.github.io/dotfiles | bash
 #   no curl:  wget -qO- seanyeh77.github.io/dotfiles | bash
-# Safe to re-run: it updates the repo and syncs plugins / LSP servers.
+# Safe to re-run: it shows what would change, then updates. Options (environment variables) are
+# listed in the README.
 
 # This is a bash script. When started by another shell (`curl ... | zsh`, `| sh`), hand over
 # to bash: from a file run it again with bash, from a pipe download it again into bash.
@@ -220,11 +221,9 @@ elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
   fi
   # Otherwise sudo is installed but this user is not an admin (a shared server or cluster):
   # do not ask for a password that cannot work. USE_SUDO=1 asks anyway.
-
 fi
-# Bound slow steps so a network problem cannot hang forever (macOS has no timeout: run as is)
-# macOS has no `timeout`: use gtimeout (coreutils) or perl's alarm, which kills the command when
-# the time is up. The command's stdin is /dev/null, so nothing can wait for input.
+# Bound slow steps so a network problem cannot hang forever. macOS has no `timeout`: use gtimeout
+# (coreutils) or perl's alarm, which kills the command when the time is up.
 with_timeout() {
   local s="$1"; shift
   if has timeout; then timeout "$s" "$@"
@@ -603,74 +602,76 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
   fi
 fi
 
-# macOS + iTerm2: a Nerd Font and this repo's iTerm2 profile (iterm2/dotfiles.json, a Dynamic
-# Profile: Catppuccin Mocha, JetBrainsMono Nerd Font, Option as Alt), set as the default profile,
-# plus clipboard access for programs in the terminal (tmux / nvim copy over SSH)
-ITERM_PROFILES="$HOME/Library/Application Support/iTerm2/DynamicProfiles"
-ITERM_GUID="3d9b7f2a-6c1e-4b8e-9f2d-5e7a0c1d2b3f"
-NEED_FONT=0; NEED_ITERM=0; NEED_GHOSTTY=0
-# Set up the terminal this is running in (TERM_PROGRAM; LC_TERMINAL / GHOSTTY_RESOURCES_DIR still
-# tell inside tmux) and any other of the two that is installed; Ghostty is only installed when it
-# is the one running or asked for. DOTFILES_TERMINAL=iterm2|ghostty sets up only that one
-# (ghostty is installed if missing); =none skips both.
-TERM_APP=""
+# ---- Terminal: Nerd Font, Ghostty, iTerm2 ----
+# The font matters only where the terminal runs: macOS, or a Linux desktop session. A server
+# reached over SSH, WSL (the terminal is on Windows) and Termux get none. DOTFILES_FONT=1|0 forces it.
+# macOS: set up the terminal this runs in (TERM_PROGRAM; LC_TERMINAL / GHOSTTY_RESOURCES_DIR still
+# tell inside tmux) and the other one if installed. Ghostty is installed only when it is the one
+# running or asked for. DOTFILES_TERMINAL=iterm2|ghostty|none sets up only that one (or neither);
+# NO_ITERM=1 / NO_GHOSTTY=1 skip one.
+#   iTerm2: this repo's profile (iterm2/dotfiles.json, a Dynamic Profile: Catppuccin Mocha,
+#           JetBrainsMono Nerd Font, Option as Alt) as the default, and clipboard access for
+#           programs in the terminal (tmux / nvim copying over SSH)
+#   Ghostty: ghostty/config, linked with the other dotfiles below
+USE_ITERM=0; USE_GHOSTTY=0
 if [ "$OS" = Darwin ]; then
   case "${DOTFILES_TERMINAL:-}" in
-    iterm*|iTerm*) TERM_APP=iterm2 ;;
-    ghostty|Ghostty) TERM_APP=ghostty ;;
-    none) TERM_APP=none ;;
-    *)
-      if [ "${TERM_PROGRAM:-}" = iTerm.app ] || [ "${LC_TERMINAL:-}" = iTerm2 ]; then TERM_APP=iterm2
-      elif [ "${TERM_PROGRAM:-}" = ghostty ] || [ -n "${GHOSTTY_RESOURCES_DIR:-}" ]; then TERM_APP=ghostty
-      fi ;;
+    iterm*|iTerm*) USE_ITERM=1 ;;
+    ghostty|Ghostty) USE_GHOSTTY=1 ;;
+    none) ;;
+    *) if [ "${TERM_PROGRAM:-}" = iTerm.app ] || [ "${LC_TERMINAL:-}" = iTerm2 ] || [ -d /Applications/iTerm.app ]; then
+         USE_ITERM=1
+       fi
+       if [ "${TERM_PROGRAM:-}" = ghostty ] || [ -n "${GHOSTTY_RESOURCES_DIR:-}" ] || [ -d /Applications/Ghostty.app ]; then
+         USE_GHOSTTY=1
+       fi ;;
   esac
+  [ "${NO_ITERM:-0}" = 1 ] && USE_ITERM=0
+  [ "${NO_GHOSTTY:-0}" = 1 ] && USE_GHOSTTY=0
 fi
-USE_ITERM=0; USE_GHOSTTY=0
-case "$TERM_APP" in
-  iterm2) USE_ITERM=1 ;;
-  ghostty) USE_GHOSTTY=1 ;;
-esac
-if [ "$OS" = Darwin ] && [ -z "${DOTFILES_TERMINAL:-}" ]; then
-  [ -d /Applications/iTerm.app ] && USE_ITERM=1
-  [ -d /Applications/Ghostty.app ] && USE_GHOSTTY=1
-fi
-[ "${NO_ITERM:-0}" = 1 ] && USE_ITERM=0
-[ "${NO_GHOSTTY:-0}" = 1 ] && USE_GHOSTTY=0
+NEED_GHOSTTY=0
 if [ "$USE_GHOSTTY" = 1 ] && [ ! -d /Applications/Ghostty.app ]; then
   NEED_GHOSTTY=1
   user_plan "Ghostty" "new, brew install --cask (terminal that shows images in nvim)"
 fi
-if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then
-  NEED_FONT=1
-  for f in "$HOME"/Library/Fonts/JetBrainsMonoNerdFont* /Library/Fonts/JetBrainsMonoNerdFont*; do
-    [ -e "$f" ] && { NEED_FONT=0; break; }
+
+FONT_DIR="$DATA_HOME/fonts/JetBrainsMonoNerdFont" # Linux
+want_font=0
+case "${DOTFILES_FONT:-}" in
+  1) want_font=1 ;;
+  0) ;;
+  *) if [ "$OS" = Darwin ]; then
+       if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then want_font=1; fi
+     elif [ "$IS_WSL" = 0 ] && [ "$IS_TERMUX" = 0 ] && [ -z "${SSH_CONNECTION:-}" ] \
+          && { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${XDG_CURRENT_DESKTOP:-}" ]; }; then
+       want_font=1
+     fi ;;
+esac
+font_installed() {
+  local f
+  for f in "$HOME"/Library/Fonts/JetBrainsMonoNerdFont* /Library/Fonts/JetBrainsMonoNerdFont* "$FONT_DIR"; do
+    [ -e "$f" ] && return 0
   done
-  [ "$NEED_FONT" = 1 ] && user_plan "JetBrainsMono Nerd Font" "new, brew install --cask (icons in nvim)"
-fi
-# Linux desktop (a graphical session, not over SSH; not WSL / Termux, whose terminal runs elsewhere):
-# JetBrainsMono Nerd Font into ~/.local/share/fonts so the terminal shows nvim's icons.
-# Servers you only ssh into need no font: your own terminal draws the text. DOTFILES_FONT=1|0 forces it.
-LINUX_FONT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/JetBrainsMonoNerdFont"
-NEED_LFONT=0; LFONT_VER=""
-if [ "$OS" = Linux ] && [ "$IS_WSL" = 0 ] && [ "$IS_TERMUX" = 0 ]; then
-  want_font=0
-  case "${DOTFILES_FONT:-}" in
-    1) want_font=1 ;;
-    0) ;;
-    *) if [ -z "${SSH_CONNECTION:-}" ] && { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ] \
-            || [ -n "${XDG_CURRENT_DESKTOP:-}" ]; }; then want_font=1; fi ;;
-  esac
-  if [ "$want_font" = 1 ] && [ ! -d "$LINUX_FONT_DIR" ] \
-     && ! { has fc-list && fc-list : family 2>/dev/null | grep -i 'JetBrainsMono Nerd' >/dev/null; }; then
-    NEED_LFONT=1
-    LFONT_VER="$(gh_latest ryanoasis/nerd-fonts)"
-    user_plan "JetBrainsMono Nerd Font" "new, ${LFONT_VER:-latest}, into ~/.local/share/fonts (icons in nvim)"
+  # (no grep -q: it would stop reading early and fail the pipe under pipefail)
+  has fc-list && fc-list : family 2>/dev/null | grep -i 'JetBrainsMono Nerd' >/dev/null
+}
+NEED_FONT=0; FONT_VER=""
+if [ "$want_font" = 1 ] && ! font_installed; then
+  NEED_FONT=1
+  if [ "$PM" = brew ]; then
+    user_plan "JetBrainsMono Nerd Font" "new, brew install --cask (icons in nvim)"
+  else
+    FONT_VER="$(gh_latest ryanoasis/nerd-fonts)"
+    user_plan "JetBrainsMono Nerd Font" "new ${FONT_VER:-latest}, ~/.local/share/fonts (icons in nvim)"
   fi
 fi
-if [ "$USE_ITERM" = 1 ]; then
-  if [ ! -f "$ITERM_PROFILES/dotfiles.json" ] || [ ! -f "$DOTFILES_DIR/iterm2/dotfiles.json" ] \
-     || ! cmp -s "$DOTFILES_DIR/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"; then NEED_ITERM=1; fi
-  [ "$NEED_ITERM" = 1 ] && user_plan "iTerm2 profile" "Catppuccin Mocha, Nerd Font, Option as Alt; set as default, clipboard access on"
+
+ITERM_PROFILES="$HOME/Library/Application Support/iTerm2/DynamicProfiles"
+ITERM_GUID="3d9b7f2a-6c1e-4b8e-9f2d-5e7a0c1d2b3f"
+NEED_ITERM=0
+if [ "$USE_ITERM" = 1 ] && ! cmp -s "$DOTFILES_DIR/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"; then
+  NEED_ITERM=1
+  user_plan "iTerm2 profile" "Catppuccin Mocha, Nerd Font, Option as Alt; set as default, clipboard access on"
 fi
 
 if [ ${#SYS_PLAN[@]} -eq 0 ] && [ ${#USER_PLAN[@]} -eq 0 ]; then
@@ -939,7 +940,7 @@ link() { # back up existing config instead of overwriting it
 link "$DOTFILES_DIR/nvim" "$HOME/.config/nvim"
 if [ "$OS" != Darwin ] || [ "$USE_GHOSTTY" = 1 ]; then
   link "$DOTFILES_DIR/ghostty/config" "$HOME/.config/ghostty/config"
-  # Ghostty on macOS also loads a config in Application Support, after (and over) this one: back it up
+  # Ghostty on macOS also loads a config in Application Support, after (and over) this one: move it aside
   for f in "$HOME/Library/Application Support/com.mitchellh.ghostty/config" \
            "$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty"; do
     if [ -s "$f" ] && [ ! -L "$f" ]; then
@@ -973,9 +974,7 @@ done
 . "$DOTFILES_DIR/shell/env.sh"
 
 # ---------- nvim plugins, LSP servers, treesitter parsers (all headless) ----------
-# Only missing ones are installed: `Lazy! install` does not update plugins (use :Lazy update),
-# and Mason / treesitter skip what is already there.
-# Bound every step so a network problem cannot hang forever (macOS has no timeout: run as is)
+# Everything is installed when missing and updated to the latest; each step is time-bounded.
 # Lazy sync: install missing plugins and update all of them to the latest commit
 log "Installing and updating nvim plugins (LazyVim, up to a minute)"
 # Lazy's per-plugin progress goes to a log (shown only on failure); the summary lists the
@@ -1021,32 +1020,30 @@ else
   fi
 fi
 
-# ---------- Terminal font, Ghostty and iTerm2 ----------
-if [ "$NEED_GHOSTTY" = 1 ]; then
-  log "Installing Ghostty"
-  if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask ghostty >/dev/null 2>&1; then did "Ghostty (config: ~/.config/ghostty/config)"
-  else failed "Ghostty (brew install --cask ghostty)"; fi
-fi
-if [ "$NEED_LFONT" = 1 ]; then
-  log "Installing JetBrainsMono Nerd Font"
-  if [ -n "$LFONT_VER" ]; then u="https://github.com/ryanoasis/nerd-fonts/releases/download/$LFONT_VER/JetBrainsMono.tar.xz"
-  else u="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.tar.xz"; fi
-  rm -rf "$TMP/nerdfont"; mkdir -p "$TMP/nerdfont"
-  if fetch_once "$u" "$TMP/nerdfont.tar.xz" && tar -xJf "$TMP/nerdfont.tar.xz" -C "$TMP/nerdfont" \
-     && ls "$TMP"/nerdfont/JetBrainsMonoNerdFont-*.ttf >/dev/null 2>&1; then
-    # The regular and Mono (single-width icons) families; skip NL / Propo variants
-    mkdir -p "$LINUX_FONT_DIR"
-    cp "$TMP"/nerdfont/JetBrainsMonoNerdFont-*.ttf "$TMP"/nerdfont/JetBrainsMonoNerdFontMono-*.ttf "$LINUX_FONT_DIR"/
-    if has fc-cache; then fc-cache -f "$LINUX_FONT_DIR" >/dev/null 2>&1 || true; fi
-    did "JetBrainsMono Nerd Font${LFONT_VER:+ $LFONT_VER} (pick \"JetBrainsMono Nerd Font\" in your terminal's settings)"
-  else failed "JetBrainsMono Nerd Font ($u)"; fi
-  rm -rf "$TMP/nerdfont" "$TMP/nerdfont.tar.xz"
-fi
-if [ "$NEED_FONT" = 1 ]; then
+# ---------- Terminal: Nerd Font, Ghostty, iTerm2 ----------
+if [ "$NEED_FONT" = 1 ] && [ "$PM" = brew ]; then
   log "Installing JetBrainsMono Nerd Font"
   if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask font-jetbrains-mono-nerd-font >/dev/null 2>&1; then
     did "JetBrainsMono Nerd Font"
   else failed "JetBrainsMono Nerd Font (brew install --cask font-jetbrains-mono-nerd-font)"; fi
+elif [ "$NEED_FONT" = 1 ]; then
+  log "Installing JetBrainsMono Nerd Font ${FONT_VER:-latest} in ~/.local/share/fonts"
+  if [ -n "$FONT_VER" ]; then u="download/$FONT_VER"; else u="latest/download"; fi
+  u="https://github.com/ryanoasis/nerd-fonts/releases/$u/JetBrainsMono.tar.xz"
+  mkdir -p "$TMP/font"
+  if fetch_once "$u" "$TMP/font.tar.xz" && tar -xJf "$TMP/font.tar.xz" -C "$TMP/font" \
+     && ls "$TMP"/font/JetBrainsMonoNerdFont-*.ttf >/dev/null 2>&1; then
+    # The regular and Mono (single-width icons) families; not the NL / Propo variants
+    mkdir -p "$FONT_DIR"
+    cp "$TMP"/font/JetBrainsMonoNerdFont-*.ttf "$TMP"/font/JetBrainsMonoNerdFontMono-*.ttf "$FONT_DIR"/
+    if has fc-cache; then fc-cache -f "$FONT_DIR" >/dev/null 2>&1 || true; fi
+    did "JetBrainsMono Nerd Font${FONT_VER:+ $FONT_VER} (pick \"JetBrainsMono Nerd Font\" in your terminal's settings)"
+  else failed "JetBrainsMono Nerd Font ($u)"; fi
+fi
+if [ "$NEED_GHOSTTY" = 1 ]; then
+  log "Installing Ghostty"
+  if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask ghostty >/dev/null 2>&1; then did "Ghostty (config: ~/.config/ghostty/config)"
+  else failed "Ghostty (brew install --cask ghostty)"; fi
 fi
 if [ "$NEED_ITERM" = 1 ]; then
   log "Setting up the iTerm2 profile"
