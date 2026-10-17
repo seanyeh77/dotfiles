@@ -1,0 +1,43 @@
+# Ghostty config (https://ghostty.org/docs/config), linked to ~/.config/ghostty/config by install.sh.
+# Matches nvim and tmux: Catppuccin Mocha, JetBrainsMono Nerd Font. Reload with Cmd-Shift-,
+
+font-family = JetBrainsMono Nerd Font
+font-size = 14
+
+# Catppuccin Mocha
+background = #1e1e2e
+foreground = #cdd6f4
+cursor-color = #f5e0dc
+cursor-text = #1e1e2e
+selection-background = #585b70
+selection-foreground = #cdd6f4
+palette = 0=#45475a
+palette = 1=#f38ba8
+palette = 2=#a6e3a1
+palette = 3=#f9e2af
+palette = 4=#89b4fa
+palette = 5=#f5c2e7
+palette = 6=#94e2d5
+palette = 7=#bac2de
+palette = 8=#585b70
+palette = 9=#f38ba8
+palette = 10=#a6e3a1
+palette = 11=#f9e2af
+palette = 12=#89b4fa
+palette = 13=#f5c2e7
+palette = 14=#94e2d5
+palette = 15=#a6adc8
+
+# Left Option works as Alt in nvim and tmux; right Option still types special characters
+macos-option-as-alt = left
+
+# Programs (tmux, nvim over SSH) may set the clipboard; reading it asks first
+clipboard-write = allow
+clipboard-read = ask
+
+# Over SSH: send Ghostty's terminfo to the server and set TERM so remote programs work
+shell-integration-features = ssh-env,ssh-terminfo
+
+window-padding-x = 6
+window-padding-y = 4
+scrollback-limit = 100000000

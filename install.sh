@@ -608,15 +608,22 @@ fi
 # plus clipboard access for programs in the terminal (tmux / nvim copy over SSH)
 ITERM_PROFILES="$HOME/Library/Application Support/iTerm2/DynamicProfiles"
 ITERM_GUID="3d9b7f2a-6c1e-4b8e-9f2d-5e7a0c1d2b3f"
-NEED_FONT=0; NEED_ITERM=0
-if [ "$OS" = Darwin ] && [ -d /Applications/iTerm.app ] && [ "${NO_ITERM:-0}" != 1 ]; then
+NEED_FONT=0; NEED_ITERM=0; NEED_GHOSTTY=0
+# Ghostty (macOS): shows images inside nvim (kitty graphics protocol); config in ghostty/config
+if [ "$OS" = Darwin ] && [ ! -d /Applications/Ghostty.app ] && [ "${NO_GHOSTTY:-0}" != 1 ]; then
+  NEED_GHOSTTY=1
+  user_plan "Ghostty" "new, brew install --cask (terminal that shows images in nvim)"
+fi
+if [ "$OS" = Darwin ]; then
   NEED_FONT=1
   for f in "$HOME"/Library/Fonts/JetBrainsMonoNerdFont* /Library/Fonts/JetBrainsMonoNerdFont*; do
     [ -e "$f" ] && { NEED_FONT=0; break; }
   done
+  [ "$NEED_FONT" = 1 ] && user_plan "JetBrainsMono Nerd Font" "new, brew install --cask (icons in nvim)"
+fi
+if [ "$OS" = Darwin ] && [ -d /Applications/iTerm.app ] && [ "${NO_ITERM:-0}" != 1 ]; then
   if [ ! -f "$ITERM_PROFILES/dotfiles.json" ] || [ ! -f "$DOTFILES_DIR/iterm2/dotfiles.json" ] \
      || ! cmp -s "$DOTFILES_DIR/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"; then NEED_ITERM=1; fi
-  [ "$NEED_FONT" = 1 ] && user_plan "JetBrainsMono Nerd Font" "new, brew install --cask (icons in nvim)"
   [ "$NEED_ITERM" = 1 ] && user_plan "iTerm2 profile" "Catppuccin Mocha, Nerd Font, Option as Alt; set as default, clipboard access on"
 fi
 
@@ -884,6 +891,7 @@ link() { # back up existing config instead of overwriting it
   ln -sfn "$src" "$dst"
 }
 link "$DOTFILES_DIR/nvim" "$HOME/.config/nvim"
+link "$DOTFILES_DIR/ghostty/config" "$HOME/.config/ghostty/config"
 
 # tmux: Oh my tmux! (https://github.com/gpakosz/.tmux) plus this repo's tmux/tmux.conf.local
 if [ "$NEED_OMT" = 0 ]; then
@@ -958,7 +966,12 @@ else
   fi
 fi
 
-# ---------- iTerm2 (macOS) ----------
+# ---------- Ghostty and iTerm2 (macOS) ----------
+if [ "$NEED_GHOSTTY" = 1 ]; then
+  log "Installing Ghostty"
+  if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask ghostty >/dev/null 2>&1; then did "Ghostty (config: ~/.config/ghostty/config)"
+  else failed "Ghostty (brew install --cask ghostty)"; fi
+fi
 if [ "$NEED_FONT" = 1 ]; then
   log "Installing JetBrainsMono Nerd Font"
   if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask font-jetbrains-mono-nerd-font >/dev/null 2>&1; then
