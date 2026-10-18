@@ -120,6 +120,11 @@ jobs:
         env:
           DOTFILES_DIR: ${{ github.workspace }}
           INSTALL_DOCKER: ${{ matrix.docker && '1' || '0' }}
+      - name: step timings
+        if: always()
+        shell: bash
+        run: |
+          grep -aE '^==> .*\[t=[0-9]+s\]|: done \(' "$RUNNER_TEMP/install.log" | sed 's/^/::notice title=timing::/' || true
       - name: Docker was installed
         if: matrix.docker
         shell: bash

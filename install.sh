@@ -118,7 +118,7 @@ step_end() { # finish the current step: "✓ label (12s)", or "!" when something
 step() { # step LABEL: start a step (and end the previous one)
   step_end
   STEP_LABEL="$*"; STEP_T0="$SECONDS"; STEP_BAD=0
-  printf '==> %s\n' "$*"   # the log, or the screen when not on a terminal
+  printf '==> %s [t=%ss]\n' "$*" "$SECONDS"   # the log, or the screen when not on a terminal
   spin_start "$*"
 }
 log() { # an information line
@@ -167,7 +167,7 @@ job() { # job NAME LABEL FUNCTION
     failed()    { printf 'failed\t%s\n' "$*" >> "$JD.res"; printf '!! not installed: %s\n' "$*"; }
     note()      { printf 'note\t%s\n' "$*" >> "$JD.res"; printf '   %s\n' "$*"; }
     warn()      { printf 'warn\t%s\n' "$*" >> "$JD.res"; printf '!! %s\n' "$*"; }
-    step()      { printf '%s\n' "$*" > "$JD.label"; printf '==> %s\n' "$*"; }
+    step()      { printf '%s\n' "$*" > "$JD.label"; printf '==> %s [t=%ss]\n' "$*" "$SECONDS"; }
     die()       { printf 'failed\t%s\n' "$*" >> "$JD.res"; printf 'xx %s\n' "$*"; exit 1; }
     on_screen() { "$@"; }
     exec >> "$jd.log" 2>&1 </dev/null
@@ -203,7 +203,7 @@ jobs_wait() {
     printf '%s[?25l' "$ESC" >&3
     jobs_draw
   else
-    for i in "${!J_NAMES[@]}"; do printf '==> started: %s\n' "$(cat "$TMP/job.${J_NAMES[$i]}.name")"; done
+    for i in "${!J_NAMES[@]}"; do printf '==> started: %s [t=%ss]\n' "$(cat "$TMP/job.${J_NAMES[$i]}.name")" "$SECONDS"; done
   fi
   while :; do
     left=0
