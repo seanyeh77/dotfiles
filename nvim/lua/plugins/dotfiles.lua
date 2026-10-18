@@ -21,8 +21,29 @@ return {
     "neovim/nvim-lspconfig",
     opts = function(_, opts)
       opts.servers = opts.servers or {}
-      -- Bash is not part of LazyVim's defaults
-      opts.servers.bashls = opts.servers.bashls or {}
+      -- Bash is not part of LazyVim's defaults. Make `gd` work across files:
+      -- - a variable from `source $DIR/env.sh` cannot be traced (the path depends on a variable), so
+      --   fall back to a definition anywhere in the project (includeAllWorkspaceSymbols);
+      -- - scan subfolders too (nvim-lspconfig only scans the top folder) and .env files;
+      -- - outside a git repo, the project is the folder nvim was opened in (never ~ itself).
+      opts.servers.bashls = vim.tbl_deep_extend("force", {
+        settings = {
+          bashIde = {
+            globPattern = "**/*@(.sh|.inc|.bash|.command|.env)",
+            includeAllWorkspaceSymbols = true,
+          },
+        },
+        root_dir = function(bufnr, on_dir)
+          local root = vim.fs.root(bufnr, ".git")
+          if not root then
+            local cwd, file = vim.fn.getcwd(), vim.api.nvim_buf_get_name(bufnr)
+            if cwd ~= vim.env.HOME and cwd ~= "/" and file:sub(1, #cwd + 1) == cwd .. "/" then
+              root = cwd
+            end
+          end
+          on_dir(root) -- nil: a single file on its own
+        end,
+      }, type(opts.servers.bashls) == "table" and opts.servers.bashls or {})
 
       -- marksman is a .NET binary that needs ICU at startup, which minimal images (Fedora,
       -- RHEL, openSUSE, Alpine) lack; it does not need culture data, so run it without
