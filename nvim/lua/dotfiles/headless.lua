@@ -168,34 +168,40 @@ local function install_ts(langs, timeout_ms)
 end
 
 --- Install or update Mason packages and treesitter parsers, report, then quit nvim (exit 1 on failures).
-function M.install()
+--- what: "mason" or "parsers" for one of them (install.sh runs the two in parallel), nil for both.
+function M.install(what)
   M.failed = 0
   local ok, err = pcall(function()
     local want = M.collect()
-    if #want.servers == 0 then
-      out("!! LazyVim selected no Mason language servers (registry unavailable?)")
-      M.failed = M.failed + 1
+    local failed, missing = {}, {}
+    if what ~= "parsers" then
+      if #want.servers == 0 then
+        out("!! LazyVim selected no Mason language servers (registry unavailable?)")
+        M.failed = M.failed + 1
+      end
+      out("Mason packages: " .. table.concat(want.mason, " "))
+      failed = install_mason(want.mason, 15 * 60 * 1000)
+      if #failed > 0 then -- one retry for transient download errors
+        local retry = vim.tbl_map(function(f)
+          return (f:gsub(" %(.*%)$", ""))
+        end, failed)
+        out("  mason: retrying " .. table.concat(retry, " "))
+        failed = install_mason(retry, 10 * 60 * 1000)
+      end
+      if #failed > 0 then
+        out("!! Mason packages not installed: " .. table.concat(failed, ", "))
+      end
     end
-    out("Mason packages: " .. table.concat(want.mason, " "))
-    local failed = install_mason(want.mason, 15 * 60 * 1000)
-    if #failed > 0 then -- one retry for transient download errors
-      local retry = vim.tbl_map(function(f)
-        return (f:gsub(" %(.*%)$", ""))
-      end, failed)
-      out("  mason: retrying " .. table.concat(retry, " "))
-      failed = install_mason(retry, 10 * 60 * 1000)
-    end
-    out("Treesitter parsers: " .. table.concat(want.ts, " "))
-    local missing = install_ts(want.ts, 5 * 60 * 1000)
-    -- Rebuild parsers whose revision changed in the updated nvim-treesitter
-    pcall(function()
-      require("nvim-treesitter").update():wait(5 * 60 * 1000)
-    end)
-    if #failed > 0 then
-      out("!! Mason packages not installed: " .. table.concat(failed, ", "))
-    end
-    if #missing > 0 then
-      out("!! treesitter parsers not installed: " .. table.concat(missing, ", "))
+    if what ~= "mason" then
+      out("Treesitter parsers: " .. table.concat(want.ts, " "))
+      missing = install_ts(want.ts, 5 * 60 * 1000)
+      -- Rebuild parsers whose revision changed in the updated nvim-treesitter
+      pcall(function()
+        require("nvim-treesitter").update():wait(5 * 60 * 1000)
+      end)
+      if #missing > 0 then
+        out("!! treesitter parsers not installed: " .. table.concat(missing, ", "))
+      end
     end
     M.failed = M.failed + #failed + #missing
   end)

@@ -662,6 +662,13 @@ for s in "${OS_REQ[@]}"; do spec_installed "$s" || MISS_REQ+=("${s%%:*}"); done
 for s in "${OS_OPT[@]}"; do spec_installed "$s" || MISS_OPT+=("${s%%:*}"); done
 NEED_BREW=0; [ "$PM" = brew ] && ! has brew && NEED_BREW=1
 NEED_OS=0; [ ${#MISS_REQ[@]} -gt 0 ] || [ ${#MISS_OPT[@]} -gt 0 ] || [ "$NEED_BREW" = 1 ] && NEED_OS=1
+# Homebrew: refresh its index in the background now (it takes half a minute), while the plan is
+# read; the OS packages step waits for it. It changes no installed formula.
+BREW_UPD_PID=""
+if [ "$PM" = brew ] && has brew && [ "$NEED_OS" = 1 ] && [ "$NEED_BREW" = 0 ]; then
+  ( brew update --quiet >/dev/null 2>&1 ) &
+  BREW_UPD_PID=$!
+fi
 # As root, refresh the package index now so the plan can show the versions that will be installed
 # (container images ship without one). It only refreshes metadata, nothing is upgraded.
 INDEX_FRESH=0
@@ -1213,8 +1220,9 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
       pacman)  sudo pacman -Sy --noconfirm ;;
       zypper)  sudo zypper --non-interactive refresh || true ;;
       apk)     sudo apk update ;;
-      brew)    # quietly: its own output lists every new formula (hundreds of lines)
-               brew update --quiet >/dev/null 2>&1 || warn "brew update failed, installing with the current package list" ;;
+      brew)    # started in the background before the plan (quietly: it lists every new formula)
+               if [ -n "$BREW_UPD_PID" ]; then wait "$BREW_UPD_PID" 2>/dev/null || warn "brew update failed, installing with the current package list"
+               else brew update --quiet >/dev/null 2>&1 || warn "brew update failed, installing with the current package list"; fi ;;
     esac
   fi
   # macOS: Homebrew stops with "You have not agreed to the Xcode license" when Xcode is
@@ -1475,34 +1483,6 @@ job_node() {
     elif [ -n "$NODE_CUR" ]; then did "Node.js $(node -v) (was $NODE_CUR)"
     else did "Node.js $(node -v)"; fi
   fi
-  # ---------- tree-sitter CLI (nvim-treesitter uses it to compile parsers) ----------
-  if [ "$NEED_TS" = 1 ] && has npm; then
-    # npm package in ~/.local/opt/tree-sitter-cli; works with any Node.js, no global install
-    step "Installing tree-sitter CLI ${TS_LATEST:-latest} in ~/.local/opt/tree-sitter-cli"
-    npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" "tree-sitter-cli@${TS_LATEST#v}" >/dev/null 2>&1 \
-      || npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" tree-sitter-cli@latest >/dev/null
-    ln -sf "$LOCAL_OPT/tree-sitter-cli/node_modules/.bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
-    hash -r
-    # The prebuilt binary needs glibc 2.39. On older systems (Debian 12, RHEL 9, Ubuntu 22.04)
-    # it fails with "GLIBC_2.39 not found", so build it from source with cargo instead.
-    if ! ts_works "$LOCAL_BIN/tree-sitter"; then
-      step "tree-sitter binary needs newer glibc, building from source with cargo (takes a few minutes)"
-      if ! has cargo && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
-        fetch https://sh.rustup.rs "$TMP/rustup.sh"
-        sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null
-        did "Rust (rustup, in ~/.cargo)"
-      fi
-      CARGO="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
-      if [ -n "$TS_LATEST" ]; then "$CARGO" install --locked --force tree-sitter-cli --version "${TS_LATEST#v}"
-      else "$CARGO" install --locked --force tree-sitter-cli; fi
-      ln -sf "$HOME/.cargo/bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
-      hash -r
-    fi
-    if ts_works "$LOCAL_BIN/tree-sitter"; then
-      v="v$("$LOCAL_BIN/tree-sitter" --version | awk '{print $2}')"
-      if [ -n "$TS_CUR" ]; then did "tree-sitter CLI $v (was $TS_CUR)"; else did "tree-sitter CLI $v"; fi
-    else failed "tree-sitter CLI"; fi
-  fi
 }
 job_ssh() {
   # ---------- trzsz, tssh, tsshd (per user, Linux / Termux) ----------
@@ -1667,24 +1647,20 @@ job_claude() {
     fi
 }
 job_mason() {
-  step "Installing and updating LSP servers, formatters and treesitter parsers"
-  # CFLAGS: tree-sitter's default flags include -Wall, which makes gcc 12.2 (Debian 12) spend
-  # minutes on large generated parsers such as gitcommit. config/options.lua sets the same default.
-  export CFLAGS="${CFLAGS:--O2}"
-  # DOTFILES_HEADLESS_INSTALL stops LazyVim's background parser builds; headless.lua builds them
-  # itself and waits for every Mason package and parser to finish (see nvim/lua/dotfiles/headless.lua)
-  # `cquit 1` runs only if install() itself failed to quit (e.g. a Lua error), so nvim never hangs
-  # Shows only what changes (Mason installs / updates, parser builds, errors); full log in a file
-  if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install()" \
+  step "Installing and updating LSP servers and formatters (Mason)"
+  # DOTFILES_HEADLESS_INSTALL stops LazyVim's own background installs; headless.lua installs and
+  # waits for every Mason package (see nvim/lua/dotfiles/headless.lua). `cquit 1` runs only if
+  # install() itself failed to quit (e.g. a Lua error), so nvim never hangs.
+  if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install('mason')" \
        -c "cquit 1" </dev/null 2>&1 | tee "$TMP/headless.log" \
-       | { grep --line-buffered -E 'mason: |treesitter round|^!!' || true; }; then
+       | { grep --line-buffered -E 'mason: |^!!' || true; }; then
     [ "$NEED_LAZY" = 1 ] && did "nvim plugins, LSP servers, formatters and parsers (latest)"
     # "  mason: updating NAME A -> B" / "  mason: installing NAME V" lines from headless.lua
     sed -n 's/^ *mason: updating \(.*\)/Mason \1/p; s/^ *mason: installing \(.*\)/Mason \1 (new)/p' "$TMP/headless.log" \
       | tr -d '\r' > "$TMP/mason.done"
     if [ "$NEED_LAZY" = 0 ]; then while IFS= read -r l; do did "$l"; done < "$TMP/mason.done"; fi
   else
-    failed "some LSP servers or parsers (open nvim and check :Mason and :checkhealth)"
+    failed "some LSP servers or formatters (open nvim and check :Mason)"
     # Mason's own log has the full reason for each failure
     MASON_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/nvim/mason.log"
     if [ -f "$MASON_LOG" ]; then
@@ -1692,7 +1668,58 @@ job_mason() {
       grep -i 'error\|fail' "$MASON_LOG" | tail -n 5 | cut -c1-300 >&2 || true
     fi
   fi
-
+}
+job_parsers() {
+  # ---------- tree-sitter CLI (nvim-treesitter uses it to compile parsers) ----------
+  if [ "$NEED_TS" = 1 ] && has npm; then
+    # npm package in ~/.local/opt/tree-sitter-cli; works with any Node.js, no global install
+    step "Installing tree-sitter CLI ${TS_LATEST:-latest} in ~/.local/opt/tree-sitter-cli"
+    npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" "tree-sitter-cli@${TS_LATEST#v}" >/dev/null 2>&1 \
+      || npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" tree-sitter-cli@latest >/dev/null
+    ln -sf "$LOCAL_OPT/tree-sitter-cli/node_modules/.bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
+    hash -r
+    # The prebuilt binary needs glibc 2.39. On older systems (Debian 12, RHEL 9, Ubuntu 22.04)
+    # it fails with "GLIBC_2.39 not found", so build it from source with cargo instead.
+    if ! ts_works "$LOCAL_BIN/tree-sitter"; then
+      step "tree-sitter binary needs newer glibc, building from source with cargo (takes a few minutes)"
+      if ! has cargo && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+        fetch https://sh.rustup.rs "$TMP/rustup.sh"
+        sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null
+        did "Rust (rustup, in ~/.cargo)"
+      fi
+      CARGO="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
+      if [ -n "$TS_LATEST" ]; then "$CARGO" install --locked --force tree-sitter-cli --version "${TS_LATEST#v}"
+      else "$CARGO" install --locked --force tree-sitter-cli; fi
+      ln -sf "$HOME/.cargo/bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
+      hash -r
+    fi
+    if ts_works "$LOCAL_BIN/tree-sitter"; then
+      v="v$("$LOCAL_BIN/tree-sitter" --version | awk '{print $2}')"
+      if [ -n "$TS_CUR" ]; then did "tree-sitter CLI $v (was $TS_CUR)"; else did "tree-sitter CLI $v"; fi
+    else failed "tree-sitter CLI"; fi
+  fi
+  hash -r
+  if ! has tree-sitter || ! ts_works tree-sitter; then
+    warn "tree-sitter CLI missing or broken, syntax highlighting parsers will not compile"
+  fi
+  # LazyVim installs tree-sitter-cli through Mason when none is on PATH (e.g. nvim was opened before
+  # this step finished). That is the same glibc 2.39 build, so remove it if it cannot run here.
+  MASON_DIR="$DATA_HOME/nvim/mason"
+  if [ -e "$MASON_DIR/bin/tree-sitter" ] && ! "$MASON_DIR/bin/tree-sitter" --version >/dev/null 2>&1; then
+    step "Removing Mason's tree-sitter-cli (cannot run on this system)"
+    rm -rf "$MASON_DIR/packages/tree-sitter-cli" "$MASON_DIR/bin/tree-sitter"
+  fi
+  step "Compiling treesitter parsers"
+  # CFLAGS: tree-sitter's default flags include -Wall, which makes gcc 12.2 (Debian 12) spend
+  # minutes on large generated parsers such as gitcommit. config/options.lua sets the same default.
+  export CFLAGS="${CFLAGS:--O2}"
+  if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install('parsers')" \
+       -c "cquit 1" </dev/null 2>&1 | tee "$TMP/parsers.log" \
+       | { grep --line-buffered -E 'treesitter round|^!!' || true; }; then
+    :
+  else
+    failed "some treesitter parsers (open nvim and run :checkhealth nvim-treesitter)"
+  fi
 }
 claude_setup_plugins() { # the official marketplace and the helpers for installing plugins and skills
     MP=claude-plugins-official
@@ -1767,7 +1794,7 @@ job_claude_plugins() {
 # ---------- Tools, in parallel ----------
 # Each one downloads into its own place; nothing here asks anything (sudo was used above)
 [ "$NEED_NVIM" = 1 ] && job nvim "Neovim" job_nvim
-{ [ "$NEED_NODE" = 1 ] || [ "$NEED_TS" = 1 ]; } && job node "Node.js and tree-sitter CLI" job_node
+[ "$NEED_NODE" = 1 ] && job node "Node.js" job_node
 { [ "$NEED_UV" = 1 ] || [ "$NEED_PY" = 1 ]; } && job uv "uv and Python" job_uv
 [ "$NEED_LG" = 1 ] && job lazygit "lazygit" job_lazygit
 SSH_TODO=0
@@ -1783,17 +1810,6 @@ has nvim || die "Neovim is not installed"
 nvim_ok || warn "$(nvim --version 2>/dev/null | sed -n 1p) < 0.11, the config needs 0.11+"
 
 node_ok || warn "Node.js >= 18 not found, JS-based LSPs (pyright, ts_ls...) will fail"
-
-if ! has tree-sitter || ! ts_works tree-sitter; then
-  warn "tree-sitter CLI missing or broken, syntax highlighting parsers will not compile"
-fi
-# LazyVim installs tree-sitter-cli through Mason when none is on PATH (e.g. nvim was opened before
-# this step finished). That is the same glibc 2.39 build, so remove it if it cannot run here.
-MASON_DIR="$DATA_HOME/nvim/mason"
-if [ -e "$MASON_DIR/bin/tree-sitter" ] && ! "$MASON_DIR/bin/tree-sitter" --version >/dev/null 2>&1; then
-  step "Removing Mason's tree-sitter-cli (cannot run on this system)"
-  rm -rf "$MASON_DIR/packages/tree-sitter-cli" "$MASON_DIR/bin/tree-sitter"
-fi
 
 # shellcheck source=shell/env.sh
 . "$STATE_DIR/env.sh"; hash -r
@@ -1830,7 +1846,8 @@ else
 fi
 
 # LSP servers / parsers (Mason, treesitter) and Claude Code's plugins, in parallel
-job mason "LSP servers, formatters and parsers" job_mason
+job mason "LSP servers and formatters" job_mason
+job parsers "Treesitter parsers" job_parsers
 [ "$INSTALL_CLAUDE" = 1 ] && job claude_plugins "Claude Code plugins" job_claude_plugins
 jobs_wait
 # again: Mason's bin (the language servers) only exists now on a first install

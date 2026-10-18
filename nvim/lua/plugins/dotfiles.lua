@@ -79,9 +79,11 @@ return {
         table.insert(opts.ensure_installed, "rust-analyzer")
       end
       _G.DOTFILES.mason_tools = vim.deepcopy(opts.ensure_installed)
-      -- During install.sh, headless.lua is the only installer (see the treesitter note below)
+      -- During install.sh, headless.lua is the only installer (see the treesitter note below), and
+      -- installs 16 packages at a time instead of 4: most of the time goes into waiting for downloads
       if vim.env.DOTFILES_HEADLESS_INSTALL == "1" then
         opts.ensure_installed = {}
+        opts.max_concurrent_installers = 16
       end
     end,
   },
