@@ -47,3 +47,22 @@ end
 vim.keymap.set("n", "<leader>fy", copy_path("%:p"), { desc = "Copy file path" })
 vim.keymap.set("n", "<leader>fY", copy_path("%:."), { desc = "Copy relative file path" })
 vim.keymap.set("n", "<leader>fl", copy_path("%:p", true), { desc = "Copy file path:line" })
+
+-- Space f o: open the current file in the system's default app, e.g. a PDF in Preview to read every
+-- page (nvim's image preview shows only the first). Over SSH there is no app to open it with, so it
+-- tells you how to download the file instead.
+vim.keymap.set("n", "<leader>fo", function()
+  local path = vim.fn.expand("%:p")
+  if path == "" then
+    vim.notify("This buffer has no file", vim.log.levels.WARN)
+    return
+  end
+  if vim.env.SSH_CONNECTION then
+    vim.notify("Over SSH: run `tsz " .. vim.fn.expand("%:.") .. "` in the shell to download it", vim.log.levels.WARN)
+    return
+  end
+  local _, err = vim.ui.open(path)
+  if err then
+    vim.notify(err, vim.log.levels.ERROR)
+  end
+end, { desc = "Open file in system app" })

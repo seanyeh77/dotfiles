@@ -74,6 +74,7 @@ The leader key is `Space`. Press it and wait to see every binding.
 | `Space ac` / `Space as` | Open Claude / send the selection to Claude |
 | `Space aa` / `Space ad` | Accept / reject Claude's diff |
 | `Space fy` / `Space fY` / `Space fl` | Copy the file's full path / relative path / path:line |
+| `Space fo` | Open the file in the system's app, e.g. a PDF in Preview (nvim shows only its first page) |
 | `Space gc` | Compare the file with a commit you pick (again to close) |
 | `Space gg` | lazygit: stage, commit, push, browse history |
 | `:qa` | Quit |
