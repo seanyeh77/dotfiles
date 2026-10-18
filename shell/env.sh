@@ -38,7 +38,9 @@ dotfiles_ssh() {
   elif [ -t 0 ] && [ -t 1 ] && command -v trzsz >/dev/null 2>&1; then TERM="$_t" trzsz ssh "$@"
   else TERM="$_t" command ssh "$@"; fi
 }
-if [ -z "${SSH_CONNECTION:-}" ] && { command -v tssh >/dev/null 2>&1 || command -v trzsz >/dev/null 2>&1; }; then
+# Not when "SSH tools" is unticked in the installer's checklist (SETUP_SSH=0 in its saved answers)
+if [ -z "${SSH_CONNECTION:-}" ] && { command -v tssh >/dev/null 2>&1 || command -v trzsz >/dev/null 2>&1; } \
+   && ! grep -qs '^SETUP_SSH=0' "${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles/answers"; then
   alias ssh=dotfiles_ssh
 fi
 

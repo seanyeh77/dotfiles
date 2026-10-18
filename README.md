@@ -10,7 +10,7 @@ Neovim ([LazyVim](https://www.lazyvim.org)) and tmux ([Oh my tmux!](https://gith
 curl -fsSL seanyeh77.github.io/dotfiles | bash
 ```
 
-1. **Choose**: a checklist of the optional parts (Claude Code and its plugins, Docker, terminal setup, Nerd Font). `↑↓` move, `Space` toggles, `Enter` continues. Your choices are remembered.
+1. **Choose**: a checklist of the optional parts (Claude Code and its plugins, Docker, terminal setup, Nerd Font, SSH tools). `↑↓` move, `Space` toggles, `Enter` continues. Your choices are remembered.
 2. **Plan**: what will be installed or updated, with versions, split into system changes (sudo) and your own `~`. One key press to confirm.
 3. **Install**: one line per step with a spinner; the commands' output goes to `~/.local/state/dotfiles/install.log`.
 4. **Summary**: what changed, what failed and why, and the next steps.
@@ -49,7 +49,7 @@ Set them before `bash`, e.g. `curl -fsSL seanyeh77.github.io/dotfiles | DOTFILES
 | Variable | Effect |
 | --- | --- |
 | `DOTFILES_ASK=1` | Show the checklist again |
-| `INSTALL_CLAUDE`, `CLAUDE_PLUGINS="a b"`, `INSTALL_DOCKER`, `SETUP_TERMINAL`, `INSTALL_FONT` | Preset the choices (`1` or `0`) |
+| `INSTALL_CLAUDE`, `CLAUDE_PLUGINS="a b"`, `INSTALL_DOCKER`, `SETUP_TERMINAL`, `INSTALL_FONT`, `SETUP_SSH` | Preset the choices (`1` or `0`) |
 | `ASSUME_YES=1` | Do not ask before installing |
 | `DOTFILES_PLAIN=1` | No spinner: every command's output on screen |
 | `NO_SUDO=1` / `USE_SUDO=1` | Never use sudo / ask for the sudo password even if you are not in an admin group |
@@ -98,7 +98,7 @@ The prefix is `Ctrl-a`.
 
 ## SSH
 
-Every machine gets [trzsz](https://github.com/trzsz/trzsz-go) (`trz` / `tsz`), [tssh](https://github.com/trzsz/trzsz-ssh) and [tsshd](https://github.com/trzsz/tsshd). On your own computer, `ssh` runs `tssh`: it reads `~/.ssh/config` like ssh does and adds the features below. Inside an ssh session, and in scripts, `ssh` stays the plain one; `command ssh` is always the plain one.
+With **SSH tools** ticked in the checklist (the default), every machine gets [trzsz](https://github.com/trzsz/trzsz-go) (`trz` / `tsz`), [tssh](https://github.com/trzsz/trzsz-ssh) and [tsshd](https://github.com/trzsz/tsshd). Unticked, nothing is installed and `ssh` stays OpenSSH (tools an earlier run installed are left in `~/.local/bin`). On your own computer, `ssh` runs `tssh`: it reads `~/.ssh/config` like ssh does and adds the features below. Inside an ssh session, and in scripts, `ssh` stays the plain one; `command ssh` is always the plain one.
 
 ### Move files
 

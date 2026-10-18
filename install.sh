@@ -258,7 +258,8 @@ fi
 #   Claude Code and its plugins, Docker, the terminal setup (macOS) and the Nerd Font.
 # The answers are saved in ~/.config/dotfiles/answers and reused (DOTFILES_ASK=1 asks again).
 # Presets: INSTALL_CLAUDE=1|0, CLAUDE_PLUGINS="a b", INSTALL_DOCKER=1|0, SETUP_TERMINAL=1|0,
-# INSTALL_FONT=1|0 (DOTFILES_FONT=1|0 too). Without a terminal, unset ones take the defaults.
+# INSTALL_FONT=1|0 (DOTFILES_FONT=1|0 too), SETUP_SSH=1|0 (tssh, trzsz, tsshd; `ssh` runs tssh).
+# Without a terminal, unset ones take the defaults.
 # name|source|description; source is a marketplace (official, knowledge-work) or "skill"
 CLAUDE_WORKFLOW_PLUGINS=(
   "commit-commands|official|commit, push and open pull requests"
@@ -329,7 +330,7 @@ case "${DOTFILES_FONT:-}" in 1|0) INSTALL_FONT="${INSTALL_FONT:-$DOTFILES_FONT}"
 ANSWERS="$STATE_DIR/answers"
 SAVED_ANSWERS=0
 if [ "${DOTFILES_ASK:-0}" != 1 ] && [ -f "$ANSWERS" ]; then
-  for k in INSTALL_CLAUDE CLAUDE_PLUGINS INSTALL_DOCKER SETUP_TERMINAL INSTALL_FONT; do
+  for k in INSTALL_CLAUDE CLAUDE_PLUGINS INSTALL_DOCKER SETUP_TERMINAL INSTALL_FONT SETUP_SSH; do
     v="$(sed -n "s/^$k=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$ANSWERS" | tail -1)"
     if [ -z "$(eval "echo \${$k+set}")" ] && grep -q "^$k=" "$ANSWERS"; then eval "$k=\"\$v\""; SAVED_ANSWERS=1; fi
   done
@@ -339,6 +340,7 @@ OPEN=0 # something that applies here has no answer yet
 [ -n "$DOCKER_TODO" ] && [ "$DOCKER_BLOCKED" = 0 ] && [ -z "${INSTALL_DOCKER:-}" ] && OPEN=1
 [ -n "$TERM_OFFER" ] && [ -z "${SETUP_TERMINAL:-}" ] && OPEN=1
 [ "$FONT_OFFER" = 1 ] && [ -z "${INSTALL_FONT:-}" ] && OPEN=1
+[ -z "${SETUP_SSH:-}" ] && OPEN=1
 
 # The checklist, drawn on the terminal: ↑↓ (or j k) move, Space toggles, a / n all / none,
 # Enter continues, q quits. Rows: id | label | description | kind (main, sub, off)
@@ -426,6 +428,7 @@ if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "
   fi
   [ -n "$TERM_OFFER" ] && m_add terminal "Terminal setup" "$TERM_OFFER: Catppuccin, Nerd Font, Option as Alt" main "${SETUP_TERMINAL:-1}"
   [ "$FONT_OFFER" = 1 ] && m_add font "JetBrainsMono Nerd Font" "the icons in nvim and tmux" main "${INSTALL_FONT:-1}"
+  m_add ssh "SSH tools" "ssh runs tssh: tsz / trz file transfer, host menu, tsshd" main "${SETUP_SSH:-1}"
   m_run
   INSTALL_CLAUDE="$(m_value claude)"
   CLAUDE_PLUGINS=""
@@ -436,14 +439,16 @@ if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "
   if [ -n "$DOCKER_TODO" ] && [ "$DOCKER_BLOCKED" = 0 ]; then INSTALL_DOCKER="$(m_value docker)"; fi
   [ -n "$TERM_OFFER" ] && SETUP_TERMINAL="$(m_value terminal)"
   [ "$FONT_OFFER" = 1 ] && INSTALL_FONT="$(m_value font)"
+  SETUP_SSH="$(m_value ssh)"
   SAVED_ANSWERS=0
   mkdir -p "$STATE_DIR"
-  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\n' \
-    "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "${INSTALL_DOCKER:-0}" "${SETUP_TERMINAL:-1}" "${INSTALL_FONT:-1}" > "$ANSWERS"
+  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\nSETUP_SSH=%s\n' \
+    "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "${INSTALL_DOCKER:-0}" "${SETUP_TERMINAL:-1}" "${INSTALL_FONT:-1}" \
+    "${SETUP_SSH:-1}" > "$ANSWERS"
 fi
 # Defaults for anything still unset (no terminal: CI, cron)
 INSTALL_CLAUDE="${INSTALL_CLAUDE:-0}"; INSTALL_DOCKER="${INSTALL_DOCKER:-0}"
-SETUP_TERMINAL="${SETUP_TERMINAL:-1}"; INSTALL_FONT="${INSTALL_FONT:-1}"
+SETUP_TERMINAL="${SETUP_TERMINAL:-1}"; INSTALL_FONT="${INSTALL_FONT:-1}"; SETUP_SSH="${SETUP_SSH:-1}"
 if [ "$INSTALL_CLAUDE" = 1 ]; then CLAUDE_PLUGINS="${CLAUDE_PLUGINS-$ALL_PLUGINS}"; else CLAUDE_PLUGINS=""; fi
 CLAUDE_PLUGINS="$(echo ${CLAUDE_PLUGINS:-})" # normalize spaces
 case "$CLAUDE_PLUGINS" in none|NONE) CLAUDE_PLUGINS="" ;; esac
@@ -461,6 +466,7 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then CH="Claude Code ($n plugins)"; else CH="no Cl
 if [ -n "$DOCKER_TODO" ]; then CH="$CH $S_DOT Docker"; fi
 if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then CH="$CH $S_DOT terminal setup"; fi
 [ "$want_font" = 1 ] && CH="$CH $S_DOT Nerd Font"
+[ "$SETUP_SSH" = 1 ] && CH="$CH $S_DOT SSH tools"
 if [ "$SAVED_ANSWERS" = 1 ]; then CH="$CH  ${D}(saved; DOTFILES_ASK=1 to change)${N}"; fi
 log "Choices: $CH"
 
@@ -486,7 +492,8 @@ export GIT_TERMINAL_PROMPT=0
 # Python is not here: each user gets their own from uv (below).
 case "$PM" in
   brew)    OS_REQ=(git tmux ripgrep:rg fd neovim:nvim node)
-           OS_OPT=(tree-sitter-cli:tree-sitter lazygit trzsz-go:trzsz trzsz-ssh:tssh tsshd) ;;
+           OS_OPT=(tree-sitter-cli:tree-sitter lazygit)
+           [ "$SETUP_SSH" = 1 ] && OS_OPT+=(trzsz-go:trzsz trzsz-ssh:tssh tsshd) ;;
   apt-get) OS_REQ=(git curl unzip tar gzip xz-utils:xz findutils:find tmux ripgrep:rg build-essential)
            if [ "$IS_TERMUX" = 1 ]; then
              # Termux: Neovim, Node.js, tree-sitter, uv and Python come from its packages too
@@ -674,7 +681,7 @@ lk_dotfiles() { # the commit this install would use
   elif has git; then timeout_cmd 30 git ls-remote "$DOTFILES_REPO" HEAD 2>/dev/null | awk '{print $1}'; fi
 }
 lookup dotfiles "dotfiles" lk_dotfiles
-if [ "$PM" != brew ]; then
+if [ "$PM" != brew ] && [ "$SETUP_SSH" = 1 ]; then
   lookup tz_trzsz "trzsz" gh_latest trzsz/trzsz-go
   lookup tz_tssh "tssh" gh_latest trzsz/trzsz-ssh
   [ "$IS_TERMUX" = 1 ] || lookup tz_tsshd "tsshd" gh_latest trzsz/tsshd
@@ -750,7 +757,7 @@ TZ_CUR=(); TZ_LATEST=(); TZ_NEED=()
 for i in "${!TZ_TOOLS[@]}"; do
   IFS='|' read -r nm _ _ bins <<< "${TZ_TOOLS[$i]}"
   TZ_CUR[$i]=""; TZ_LATEST[$i]=""; TZ_NEED[$i]=0
-  [ "$PM" != brew ] || continue
+  [ "$PM" != brew ] && [ "$SETUP_SSH" = 1 ] || continue
   [ "$nm" = tsshd ] && [ "$IS_TERMUX" = 1 ] && continue # no Android build
   b="${bins##* }"
   if [ -x "$LOCAL_BIN/$b" ]; then
@@ -764,7 +771,7 @@ done
 # PATH: a Host * block at the end of ~/.ssh/config points it there (#!! lines are comments to ssh)
 SSH_CFG="$HOME/.ssh/config"
 NEED_SSHCFG=0
-if [ "$IS_TERMUX" = 0 ] && ! grep -qs 'TsshdPath' "$SSH_CFG"; then NEED_SSHCFG=1; fi
+if [ "$SETUP_SSH" = 1 ] && [ "$IS_TERMUX" = 0 ] && ! grep -qs 'TsshdPath' "$SSH_CFG"; then NEED_SSHCFG=1; fi
 # lazygit (git UI, Space g g in nvim): a static binary in ~/.local/bin on Linux; macOS, Alpine and
 # Termux take it from their package manager (OS_OPT)
 LG_CUR=""; LG_LATEST=""; NEED_LG=0
@@ -1317,7 +1324,7 @@ for i in "${!TZ_TOOLS[@]}"; do
   fi
 done
 # Downloads (tsz) go straight to ~/Downloads, no dialog each time. Your own files are kept.
-if [ "$OS" = Darwin ] || [ -d "$HOME/Downloads" ]; then
+if [ "$SETUP_SSH" = 1 ] && { [ "$OS" = Darwin ] || [ -d "$HOME/Downloads" ]; }; then
   if [ ! -e "$HOME/.trzsz.conf" ]; then # used by `trzsz ssh`
     mkdir -p "$HOME/Downloads"
     printf 'DefaultDownloadPath = %s/Downloads/\n' "$HOME" > "$HOME/.trzsz.conf"
