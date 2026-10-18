@@ -1833,6 +1833,9 @@ fi
 job mason "LSP servers, formatters and parsers" job_mason
 [ "$INSTALL_CLAUDE" = 1 ] && job claude_plugins "Claude Code plugins" job_claude_plugins
 jobs_wait
+# again: Mason's bin (the language servers) only exists now on a first install
+# shellcheck source=shell/env.sh
+. "$STATE_DIR/env.sh"; hash -r
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   if has claude; then
     step "Adding Claude Code language-server plugins"
