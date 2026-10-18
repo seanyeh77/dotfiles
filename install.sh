@@ -582,10 +582,11 @@ export GIT_TERMINAL_PROMPT=0
 # images such as openSUSE's lack it), a C compiler (treesitter parsers), tmux, ripgrep
 # perl: Oh my tmux! needs it to apply its theme (git usually pulls it in, minimal Alpine does not)
 # Optional: installed when available, skipped with a warning otherwise
+# imagemagick + ghostscript: nvim (snacks.image) turns images and PDFs into what the terminal shows
 # Python is not here: each user gets their own from uv (below).
 case "$PM" in
   brew)    OS_REQ=(git tmux ripgrep:rg fd neovim:nvim node)
-           OS_OPT=(tree-sitter-cli:tree-sitter lazygit)
+           OS_OPT=(tree-sitter-cli:tree-sitter lazygit imagemagick:magick ghostscript:gs)
            [ "$SETUP_SSH" = 1 ] && OS_OPT+=(trzsz-go:trzsz trzsz-ssh:tssh tsshd) ;;
   apt-get) OS_REQ=(git curl unzip tar gzip xz-utils:xz findutils:find tmux ripgrep:rg build-essential)
            if [ "$IS_TERMUX" = 1 ]; then
@@ -594,16 +595,16 @@ case "$PM" in
                      neovim:nvim nodejs-lts:node tree-sitter python:python3 uv)
              OS_OPT=(fd lua-language-server lazygit wget)
            else
-             OS_OPT=(fd-find:fdfind clangd xclip perl wget)
+             OS_OPT=(fd-find:fdfind clangd xclip perl wget imagemagick ghostscript:gs)
            fi ;;
   dnf|yum) OS_REQ=(git curl unzip tar gzip xz findutils:find tmux gcc gcc-c++:g++ make)
-           OS_OPT=(ripgrep:rg fd-find:fd clang-tools-extra:clangd xclip perl wget) ;;
+           OS_OPT=(ripgrep:rg fd-find:fd clang-tools-extra:clangd xclip perl wget ImageMagick:magick ghostscript:gs) ;;
   pacman)  OS_REQ=(git curl unzip tar gzip xz findutils:find tmux ripgrep:rg base-devel)
-           OS_OPT=(fd clang:clangd xclip perl wget) ;;
+           OS_OPT=(fd clang:clangd xclip perl wget imagemagick:magick ghostscript:gs) ;;
   zypper)  OS_REQ=(git curl unzip tar gzip xz findutils:find tmux ripgrep:rg gcc gcc-c++:g++ make)
-           OS_OPT=(fd clang-tools:clangd xclip perl wget) ;;
+           OS_OPT=(fd clang-tools:clangd xclip perl wget ImageMagick:magick ghostscript:gs) ;;
   apk)     OS_REQ=(bash git curl unzip tar gzip xz findutils:find tmux perl ripgrep:rg build-base neovim:nvim nodejs:node npm)
-           OS_OPT=(fd clang-extra-tools:clangd lua-language-server tree-sitter-cli:tree-sitter lazygit xclip wget) ;;
+           OS_OPT=(fd clang-extra-tools:clangd lua-language-server tree-sitter-cli:tree-sitter lazygit xclip wget imagemagick:magick ghostscript:gs) ;;
 esac
 # Claude Code on musl needs libgcc / libstdc++ (and uses the system ripgrep, already required)
 [ "$PM" = apk ] && [ "$INSTALL_CLAUDE" = 1 ] && OS_REQ+=(libgcc libstdc++)
