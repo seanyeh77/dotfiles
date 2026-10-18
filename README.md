@@ -12,7 +12,7 @@ curl -fsSL seanyeh77.github.io/dotfiles | bash
 
 1. **Choose**: a checklist of the optional parts (Claude Code and its plugins, Docker, terminal setup, Nerd Font, SSH tools). `↑↓` move, `Space` toggles, `Enter` continues. Your choices are remembered.
 2. **Plan**: what will be installed or updated, with versions, split into system changes (sudo) and your own `~`. One key press to confirm.
-3. **Install**: one line per step with a spinner; the commands' output goes to `~/.local/state/dotfiles/install.log`.
+3. **Install**: one line per step with a spinner; independent downloads (Neovim, Node.js, uv and Python, lazygit, SSH tools, fonts, Claude Code) run in parallel, as do the LSP servers and Claude's plugins. The commands' output goes to `~/.local/state/dotfiles/install.log`.
 4. **Summary**: what changed, what failed and why, and the next steps.
 
 Run it again to update. Without a terminal (CI, `> file`) it prints plain lines with all the output instead.

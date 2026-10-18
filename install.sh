@@ -150,6 +150,99 @@ on_screen() { # on_screen CMD...: run a command that may ask something (a passwo
   [ -n "$STEP_LABEL" ] && spin_start "$STEP_LABEL"
   return "$rc"
 }
+# ---------- Parallel jobs ----------
+# job NAME LABEL FUNCTION starts FUNCTION in the background; jobs_wait shows one line per job (spinner,
+# time, last line of its output) until all are done, then merges what they installed or failed.
+# Inside a job, did / failed / note / warn / step write to the job's files instead of the screen.
+J_NAMES=(); J_PIDS=(); J_T0=()
+job() { # job NAME LABEL FUNCTION
+  local name="$1" label="$2"; shift 2
+  local jd="$TMP/job.$name"
+  : > "$jd.res"; : > "$jd.log"; echo "$label" > "$jd.label"; echo "$label" > "$jd.name"; rm -f "$jd.rc"
+  (
+    trap - EXIT INT TERM
+    SPIN_PID=""; STEP_LABEL=""; JD="$jd"
+    did()       { printf 'did\t%s\n' "$*" >> "$JD.res"; }
+    sys_did()   { printf 'sys\t%s\n' "$*" >> "$JD.res"; }
+    failed()    { printf 'failed\t%s\n' "$*" >> "$JD.res"; printf '!! not installed: %s\n' "$*"; }
+    note()      { printf 'note\t%s\n' "$*" >> "$JD.res"; printf '   %s\n' "$*"; }
+    warn()      { printf 'warn\t%s\n' "$*" >> "$JD.res"; printf '!! %s\n' "$*"; }
+    step()      { printf '%s\n' "$*" > "$JD.label"; printf '==> %s\n' "$*"; }
+    die()       { printf 'failed\t%s\n' "$*" >> "$JD.res"; printf 'xx %s\n' "$*"; exit 1; }
+    on_screen() { "$@"; }
+    exec >> "$jd.log" 2>&1 </dev/null
+    # -e would be ignored inside ( ... ) || ...: run it as a plain statement with +e outside
+    set +e; ( set -e; "$@" ); rc=$?
+    echo "$rc" > "$jd.rc"
+  ) &
+  J_NAMES+=("$name"); J_PIDS+=("$!"); J_T0+=("$SECONDS")
+}
+jobs_draw() { # one line per job; FINAL=1 draws the result instead of the spinner
+  local i jd lab rc m d el w
+  for i in "${!J_NAMES[@]}"; do
+    jd="$TMP/job.${J_NAMES[$i]}"; lab="$(cat "$jd.label" 2>/dev/null || true)"
+    if [ -f "$jd.rc" ]; then
+      lab="$(cat "$jd.name")" # done: the job's own name, not its last step
+      rc="$(cat "$jd.rc")"; el="$(cat "$jd.time" 2>/dev/null || echo "$((SECONDS - J_T0[i]))")"
+      if [ "$rc" = 0 ] && ! grep -q '^failed' "$jd.res"; then m="$G$S_OK$N"; else m="$Y$S_WARN$N"; fi
+      printf '\r%s[K  %s %s %s(%ss)%s\n' "$ESC" "$m" "$lab" "$D" "$el" "$N" >&3
+    else
+      d="$(tail -n 1 "$jd.log" 2>/dev/null | tr -d '\r' | sed "s/${ESC}\[[0-9;?]*[A-Za-z]//g; /^==> /d; /^!! /d" || true)"
+      w=$((COLS - ${#lab} - 14)); [ "$w" -gt 0 ] || w=0
+      printf '\r%s[K  %s%s%s %s %s%ss  %s%s\n' "$ESC" "$C" "${SPIN_FRAMES[$((J_TICK % ${#SPIN_FRAMES[@]}))]}" "$N" \
+        "$lab" "$D" "$((SECONDS - J_T0[i]))" "${d:0:$w}" "$N" >&3
+    fi
+  done
+}
+jobs_wait() {
+  local i jd n=${#J_NAMES[@]} left kind msg
+  [ "$n" -gt 0 ] || return 0
+  step_end
+  J_TICK=0
+  if [ "$UI" = 1 ]; then
+    printf '%s[?25l' "$ESC" >&3
+    jobs_draw
+  else
+    for i in "${!J_NAMES[@]}"; do printf '==> started: %s\n' "$(cat "$TMP/job.${J_NAMES[$i]}.name")"; done
+  fi
+  while :; do
+    left=0
+    for i in "${!J_NAMES[@]}"; do
+      jd="$TMP/job.${J_NAMES[$i]}"
+      if [ -f "$jd.rc" ]; then
+        [ -f "$jd.time" ] || echo "$((SECONDS - J_T0[i]))" > "$jd.time"
+      else left=$((left + 1)); fi
+    done
+    if [ "$UI" = 1 ]; then printf '%s[%dA' "$ESC" "$n" >&3; jobs_draw; fi
+    [ "$left" -gt 0 ] || break
+    J_TICK=$((J_TICK + 1)); sleep 0.2 2>/dev/null || sleep 1
+  done
+  wait "${J_PIDS[@]}" 2>/dev/null || true
+  [ "$UI" = 1 ] && printf '%s[?25h' "$ESC" >&3
+  # what the jobs did; their output goes to the log (and to the screen when it is not a terminal)
+  for i in "${!J_NAMES[@]}"; do
+    jd="$TMP/job.${J_NAMES[$i]}"
+    if [ "$UI" = 1 ]; then { printf '==> %s\n' "$(cat "$jd.name")"; tr -d '\r' < "$jd.log"; } >> "$INSTALL_LOG"
+    else printf '==> %s: done (%ss)\n' "$(cat "$jd.name")" "$(cat "$jd.time")"; tr -d '\r' < "$jd.log"; fi
+    while IFS="$(printf '\t')" read -r kind msg; do
+      case "$kind" in
+        did) DONE+=("$msg") ;;
+        sys) SYS_DONE+=("$msg") ;;
+        failed) FAILED+=("$msg")
+                [ "$UI" = 1 ] && printf '    %snot installed: %s%s\n' "$Y" "$msg" "$N" >&3 ;;
+        warn) [ "$UI" = 1 ] && printf '    %s%s%s\n' "$Y" "$msg" "$N" >&3 ;;
+        note) [ "$UI" = 1 ] && printf '    %s%s%s\n' "$D" "$msg" "$N" >&3 ;;
+      esac
+    done < "$jd.res"
+    if [ "$(cat "$jd.rc")" != 0 ] && ! grep -q '^failed' "$jd.res"; then
+      FAILED+=("$(cat "$jd.name") (stopped with an error, see the log)")
+    fi
+  done
+  J_NAMES=(); J_PIDS=(); J_T0=()
+  hash -r
+  return 0
+}
+
 trap 'spin_stop; printf "%s[?25h" "$ESC" >&3; stty echo </dev/tty 2>/dev/null || true' EXIT
 trap 'exit 130' INT TERM
 
@@ -1206,78 +1299,6 @@ if [ "$NEED_DOCKER_GROUP" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   else failed "docker group (sudo usermod -aG docker $me)"; fi
 fi
 
-# Debian/Ubuntu ship fd as fdfind
-if ! has fd && has fdfind; then ln -sf "$(command -v fdfind)" "$LOCAL_BIN/fd"; fi
-
-# ---------- Neovim ----------
-# glibc Linux: official release in ~/.local/opt/nvim (distro versions are often too old; the
-# config needs >= 0.11). macOS and Alpine use the package manager's Neovim.
-if [ "$NEED_NVIM" = 1 ]; then
-  step "Installing Neovim ${NVIM_LATEST:-latest} ($NVIM_ARCH) in ~/.local/opt/nvim"
-  if [ -n "$NVIM_LATEST" ]; then u="download/$NVIM_LATEST"; else u="latest/download"; fi
-  fetch "https://github.com/neovim/neovim/releases/$u/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
-  rm -rf "$LOCAL_OPT/nvim" && mkdir -p "$LOCAL_OPT/nvim"
-  tar -C "$LOCAL_OPT/nvim" --strip-components=1 -xzf "$TMP/nvim.tar.gz"
-  ln -sf "$LOCAL_OPT/nvim/bin/nvim" "$LOCAL_BIN/nvim"
-  hash -r
-  nvim --version >/dev/null 2>&1 || die "nvim failed to run (glibc too old?). Try a newer OS release."
-  v="$(nvim --version)"; v="${v%%$'\n'*}"
-  if [ -n "$NVIM_CUR" ]; then did "Neovim ${v#NVIM } (was $NVIM_CUR)"; else did "Neovim ${v#NVIM }"; fi
-fi
-hash -r
-has nvim || die "Neovim is not installed"
-nvim_ok || warn "$(nvim --version 2>/dev/null | sed -n 1p) < 0.11, the config needs 0.11+"
-
-# ---------- Node.js (needed by pyright, ts_ls, bashls, prettier, ...) ----------
-# curl / wget may have been installed just now: look the version up again if needed
-if [ "$NEED_NODE" = 1 ] && [ -z "$NODE_LATEST" ]; then
-  NODE_LATEST="$(lk_node || true)"
-fi
-if [ "$NEED_NODE" = 1 ] && [ -z "$NODE_LATEST" ]; then
-  step "Installing Node.js"
-  failed "Node.js (could not look up the latest LTS on nodejs.org)"
-elif [ "$NEED_NODE" = 1 ]; then
-  step "Installing Node.js $NODE_LATEST ($NODE_ARCH) in ~/.local/opt/node"
-  NODE_TAR="node-$NODE_LATEST-linux-$NODE_ARCH.tar.xz"
-  fetch "https://nodejs.org/dist/$NODE_LATEST/$NODE_TAR" "$TMP/$NODE_TAR"
-  rm -rf "$LOCAL_OPT/node" && mkdir -p "$LOCAL_OPT/node"
-  tar -C "$LOCAL_OPT/node" --strip-components=1 -xJf "$TMP/$NODE_TAR"
-  for b in node npm npx; do ln -sf "$LOCAL_OPT/node/bin/$b" "$LOCAL_BIN/$b"; done
-  hash -r
-  if ! node_ok; then failed "Node.js"
-  elif [ -n "$NODE_CUR" ]; then did "Node.js $(node -v) (was $NODE_CUR)"
-  else did "Node.js $(node -v)"; fi
-fi
-node_ok || warn "Node.js >= 18 not found, JS-based LSPs (pyright, ts_ls...) will fail"
-
-# ---------- tree-sitter CLI (nvim-treesitter uses it to compile parsers) ----------
-if [ "$NEED_TS" = 1 ] && has npm; then
-  # npm package in ~/.local/opt/tree-sitter-cli; works with any Node.js, no global install
-  step "Installing tree-sitter CLI ${TS_LATEST:-latest} in ~/.local/opt/tree-sitter-cli"
-  npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" "tree-sitter-cli@${TS_LATEST#v}" >/dev/null 2>&1 \
-    || npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" tree-sitter-cli@latest >/dev/null
-  ln -sf "$LOCAL_OPT/tree-sitter-cli/node_modules/.bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
-  hash -r
-  # The prebuilt binary needs glibc 2.39. On older systems (Debian 12, RHEL 9, Ubuntu 22.04)
-  # it fails with "GLIBC_2.39 not found", so build it from source with cargo instead.
-  if ! ts_works "$LOCAL_BIN/tree-sitter"; then
-    step "tree-sitter binary needs newer glibc, building from source with cargo (takes a few minutes)"
-    if ! has cargo && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
-      fetch https://sh.rustup.rs "$TMP/rustup.sh"
-      sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null
-      did "Rust (rustup, in ~/.cargo)"
-    fi
-    CARGO="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
-    if [ -n "$TS_LATEST" ]; then "$CARGO" install --locked --force tree-sitter-cli --version "${TS_LATEST#v}"
-    else "$CARGO" install --locked --force tree-sitter-cli; fi
-    ln -sf "$HOME/.cargo/bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
-    hash -r
-  fi
-  if ts_works "$LOCAL_BIN/tree-sitter"; then
-    v="v$("$LOCAL_BIN/tree-sitter" --version | awk '{print $2}')"
-    if [ -n "$TS_CUR" ]; then did "tree-sitter CLI $v (was $TS_CUR)"; else did "tree-sitter CLI $v"; fi
-  else failed "tree-sitter CLI"; fi
-fi
 if [ "$NPM_FIX" = 1 ]; then
   step "Giving ~/.npm back to you"
   if [ "$SUDO_OK" = 1 ] && on_screen sudo chown -R "$(id -u):$(id -g)" "$HOME/.npm"; then
@@ -1289,113 +1310,9 @@ fi
 if [ "$OLD_TS_LINK" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   sudo rm -f /usr/local/bin/tree-sitter && sys_did "removed old link /usr/local/bin/tree-sitter"
 fi
-if ! has tree-sitter || ! ts_works tree-sitter; then
-  warn "tree-sitter CLI missing or broken, syntax highlighting parsers will not compile"
-fi
-# LazyVim installs tree-sitter-cli through Mason when none is on PATH (e.g. nvim was opened before
-# this step finished). That is the same glibc 2.39 build, so remove it if it cannot run here.
-MASON_DIR="$DATA_HOME/nvim/mason"
-if [ -e "$MASON_DIR/bin/tree-sitter" ] && ! "$MASON_DIR/bin/tree-sitter" --version >/dev/null 2>&1; then
-  step "Removing Mason's tree-sitter-cli (cannot run on this system)"
-  rm -rf "$MASON_DIR/packages/tree-sitter-cli" "$MASON_DIR/bin/tree-sitter"
-fi
 
-# ---------- trzsz, tssh, tsshd (per user, Linux / Termux) ----------
-case "$ARCH" in amd64) a=x86_64 ;; arm64) a=aarch64 ;; esac
-o=linux; [ "$IS_TERMUX" = 1 ] && o=android
-for i in "${!TZ_TOOLS[@]}"; do
-  [ "${TZ_NEED[$i]}" = 1 ] || continue
-  IFS='|' read -r nm repo proj bins <<< "${TZ_TOOLS[$i]}"
-  ver="${TZ_LATEST[$i]}"; [ -n "$ver" ] || ver="$(gh_latest "$repo")" # the lookup may have failed
-  if [ -z "$ver" ]; then
-    step "Installing $nm"
-    failed "$nm (could not look up the latest release)"
-    continue
-  fi
-  step "Installing $nm $ver in ~/.local/bin"
-  d="${proj}_${ver#v}_${o}_$a"
-  b="${bins##* }"
-  if fetch_once "https://github.com/$repo/releases/download/$ver/$d.tar.gz" "$TMP/$proj.tgz" \
-     && tar -C "$TMP" -xzf "$TMP/$proj.tgz" && [ -x "$TMP/$d/$b" ]; then
-    for x in $bins; do [ -f "$TMP/$d/$x" ] && mv -f "$TMP/$d/$x" "$LOCAL_BIN/$x"; done
-    if [ -n "${TZ_CUR[$i]}" ]; then did "$nm $ver (was ${TZ_CUR[$i]})"; else did "$nm $ver"; fi
-  else
-    failed "$nm"
-  fi
-done
-# Downloads (tsz) go straight to ~/Downloads, no dialog each time. Your own files are kept.
-if [ "$SETUP_SSH" = 1 ] && { [ "$OS" = Darwin ] || [ -d "$HOME/Downloads" ]; }; then
-  if [ ! -e "$HOME/.trzsz.conf" ]; then # used by `trzsz ssh`
-    mkdir -p "$HOME/Downloads"
-    printf 'DefaultDownloadPath = %s/Downloads/\n' "$HOME" > "$HOME/.trzsz.conf"
-  fi
-  # ~/.tssh.conf: read whether or not XDG_CONFIG_HOME is set (often it is not, e.g. on macOS)
-  if [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/tssh/tssh.conf" ] && [ ! -e "$HOME/.tssh.conf" ]; then
-    mkdir -p "$HOME/Downloads"
-    printf '%s\n' "# tssh settings (https://github.com/trzsz/trzsz-ssh#custom-configuration)" \
-      "# tsz saves here without asking" "DefaultDownloadPath = ~/Downloads" \
-      "# read ~/.ssh/config through ssh -G, so Match blocks work too" "UseOpenSSHConfig = yes" \
-      > "$HOME/.tssh.conf"
-    did "tssh settings (~/.tssh.conf): tsz saves into ~/Downloads"
-  fi
-fi
-if [ "$NEED_SSHCFG" = 1 ]; then
-  mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
-  [ -f "$SSH_CFG" ] || { : > "$SSH_CFG"; chmod 600 "$SSH_CFG"; }
-  printf '%s\n' "" "# dotfiles: where tssh finds tsshd on a server (it installs it in ~/.local/bin)." \
-    "# Lines starting with #!! are read by tssh only; ssh ignores them." \
-    "Host *" "  #!! TsshdPath ~/.local/bin/tsshd" >> "$SSH_CFG"
-  did "~/.ssh/config: TsshdPath ~/.local/bin/tsshd (Host * at the end)"
-fi
-
-# ---------- lazygit (per user, Linux) ----------
-# The lookup may have failed (network blip, or curl was installed only just now): try again
-if [ "$NEED_LG" = 1 ] && [ -z "$LG_LATEST" ]; then LG_LATEST="$(gh_latest jesseduffield/lazygit)"; fi
-if [ "$NEED_LG" = 1 ]; then
-  if [ -z "$LG_LATEST" ]; then
-    step "Installing lazygit"
-    failed "lazygit (could not look up the latest release)"
-  else
-    step "Installing lazygit $LG_LATEST in ~/.local/bin"
-    case "$ARCH" in amd64) a=x86_64 ;; arm64) a=arm64 ;; esac
-    if fetch_once "https://github.com/jesseduffield/lazygit/releases/download/$LG_LATEST/lazygit_${LG_LATEST#v}_Linux_$a.tar.gz" "$TMP/lazygit.tgz" \
-       && tar -C "$TMP" -xzf "$TMP/lazygit.tgz" lazygit && mv -f "$TMP/lazygit" "$LOCAL_BIN/lazygit"; then
-      if [ -n "$LG_CUR" ]; then did "lazygit $LG_LATEST (was $LG_CUR)"; else did "lazygit $LG_LATEST"; fi
-    else
-      failed "lazygit"
-    fi
-  fi
-fi
-
-# ---------- uv and Python (per user) ----------
-# uv installs into ~/.local/bin; `uv python install --default` adds python3 there too, so
-# Mason's Python tools (and the user) get a recent Python with venv and pip, no sudo needed.
-if [ "$NEED_UV" = 1 ] && [ -n "$UV_CUR" ]; then
-  step "Updating uv to ${UV_LATEST:-latest}"
-  if "$LOCAL_BIN/uv" self update -q; then did "uv $("$LOCAL_BIN/uv" --version | awk '{print $2}') (was $UV_CUR)"
-  else failed "uv update"; fi
-elif [ "$NEED_UV" = 1 ]; then
-  step "Installing uv ${UV_LATEST:-latest} in ~/.local/bin"
-  fetch https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh "$TMP/uv-installer.sh"
-  if env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$LOCAL_BIN" sh "$TMP/uv-installer.sh" --quiet && [ -x "$LOCAL_BIN/uv" ]; then
-    did "uv $("$LOCAL_BIN/uv" --version | awk '{print $2}')"
-  else
-    failed "uv"
-  fi
-fi
-hash -r
-if [ "$NEED_PY" = 1 ] && has uv; then
-  # Without a version, uv picks the newest stable Python
-  PY_ARG=(); [ -n "$PY_LATEST" ] && PY_ARG=("$PY_LATEST")
-  step "Installing Python ${PY_LATEST:-latest} with uv"
-  # --default (adds python / python3 next to python3.X) is marked experimental; hide that warning
-  if uv python install --default ${PY_ARG[@]+"${PY_ARG[@]}"} >"$TMP/uv-python.log" 2>&1 && [ -x "$LOCAL_BIN/python3" ]; then
-    hash -r; v="$("$LOCAL_BIN/python3" --version | awk '{print $2}')"
-    if [ -n "$PY_CUR" ]; then did "Python $v (was $PY_CUR)"; else did "Python $v"; fi
-  else
-    cat "$TMP/uv-python.log" >&2; failed "Python ${PY_LATEST:-latest} (uv)"
-  fi
-fi
+# Debian/Ubuntu ship fd as fdfind
+if ! has fd && has fdfind; then ln -sf "$(command -v fdfind)" "$LOCAL_BIN/fd"; fi
 
 # Plugin commits before this run, to list what changed at the end. The lockfile used to live in
 # the repo (nvim/lazy-lock.json), so read that one if there is no per-user lockfile yet.
@@ -1519,6 +1436,368 @@ done
 # shellcheck source=shell/env.sh
 . "$STATE_DIR/env.sh"
 
+# ---------- What runs in parallel (each a function, started as a job below) ----------
+job_nvim() {
+  # ---------- Neovim ----------
+  # glibc Linux: official release in ~/.local/opt/nvim (distro versions are often too old; the
+  # config needs >= 0.11). macOS and Alpine use the package manager's Neovim.
+  if [ "$NEED_NVIM" = 1 ]; then
+    step "Installing Neovim ${NVIM_LATEST:-latest} ($NVIM_ARCH) in ~/.local/opt/nvim"
+    if [ -n "$NVIM_LATEST" ]; then u="download/$NVIM_LATEST"; else u="latest/download"; fi
+    fetch "https://github.com/neovim/neovim/releases/$u/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
+    rm -rf "$LOCAL_OPT/nvim" && mkdir -p "$LOCAL_OPT/nvim"
+    tar -C "$LOCAL_OPT/nvim" --strip-components=1 -xzf "$TMP/nvim.tar.gz"
+    ln -sf "$LOCAL_OPT/nvim/bin/nvim" "$LOCAL_BIN/nvim"
+    hash -r
+    nvim --version >/dev/null 2>&1 || die "nvim failed to run (glibc too old?). Try a newer OS release."
+    v="$(nvim --version)"; v="${v%%$'\n'*}"
+    if [ -n "$NVIM_CUR" ]; then did "Neovim ${v#NVIM } (was $NVIM_CUR)"; else did "Neovim ${v#NVIM }"; fi
+  fi
+}
+job_node() {
+  # ---------- Node.js (needed by pyright, ts_ls, bashls, prettier, ...) ----------
+  # curl / wget may have been installed just now: look the version up again if needed
+  if [ "$NEED_NODE" = 1 ] && [ -z "$NODE_LATEST" ]; then
+    NODE_LATEST="$(lk_node || true)"
+  fi
+  if [ "$NEED_NODE" = 1 ] && [ -z "$NODE_LATEST" ]; then
+    step "Installing Node.js"
+    failed "Node.js (could not look up the latest LTS on nodejs.org)"
+  elif [ "$NEED_NODE" = 1 ]; then
+    step "Installing Node.js $NODE_LATEST ($NODE_ARCH) in ~/.local/opt/node"
+    NODE_TAR="node-$NODE_LATEST-linux-$NODE_ARCH.tar.xz"
+    fetch "https://nodejs.org/dist/$NODE_LATEST/$NODE_TAR" "$TMP/$NODE_TAR"
+    rm -rf "$LOCAL_OPT/node" && mkdir -p "$LOCAL_OPT/node"
+    tar -C "$LOCAL_OPT/node" --strip-components=1 -xJf "$TMP/$NODE_TAR"
+    for b in node npm npx; do ln -sf "$LOCAL_OPT/node/bin/$b" "$LOCAL_BIN/$b"; done
+    hash -r
+    if ! node_ok; then failed "Node.js"
+    elif [ -n "$NODE_CUR" ]; then did "Node.js $(node -v) (was $NODE_CUR)"
+    else did "Node.js $(node -v)"; fi
+  fi
+  # ---------- tree-sitter CLI (nvim-treesitter uses it to compile parsers) ----------
+  if [ "$NEED_TS" = 1 ] && has npm; then
+    # npm package in ~/.local/opt/tree-sitter-cli; works with any Node.js, no global install
+    step "Installing tree-sitter CLI ${TS_LATEST:-latest} in ~/.local/opt/tree-sitter-cli"
+    npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" "tree-sitter-cli@${TS_LATEST#v}" >/dev/null 2>&1 \
+      || npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" tree-sitter-cli@latest >/dev/null
+    ln -sf "$LOCAL_OPT/tree-sitter-cli/node_modules/.bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
+    hash -r
+    # The prebuilt binary needs glibc 2.39. On older systems (Debian 12, RHEL 9, Ubuntu 22.04)
+    # it fails with "GLIBC_2.39 not found", so build it from source with cargo instead.
+    if ! ts_works "$LOCAL_BIN/tree-sitter"; then
+      step "tree-sitter binary needs newer glibc, building from source with cargo (takes a few minutes)"
+      if ! has cargo && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+        fetch https://sh.rustup.rs "$TMP/rustup.sh"
+        sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null
+        did "Rust (rustup, in ~/.cargo)"
+      fi
+      CARGO="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
+      if [ -n "$TS_LATEST" ]; then "$CARGO" install --locked --force tree-sitter-cli --version "${TS_LATEST#v}"
+      else "$CARGO" install --locked --force tree-sitter-cli; fi
+      ln -sf "$HOME/.cargo/bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
+      hash -r
+    fi
+    if ts_works "$LOCAL_BIN/tree-sitter"; then
+      v="v$("$LOCAL_BIN/tree-sitter" --version | awk '{print $2}')"
+      if [ -n "$TS_CUR" ]; then did "tree-sitter CLI $v (was $TS_CUR)"; else did "tree-sitter CLI $v"; fi
+    else failed "tree-sitter CLI"; fi
+  fi
+}
+job_ssh() {
+  # ---------- trzsz, tssh, tsshd (per user, Linux / Termux) ----------
+  case "$ARCH" in amd64) a=x86_64 ;; arm64) a=aarch64 ;; esac
+  o=linux; [ "$IS_TERMUX" = 1 ] && o=android
+  for i in "${!TZ_TOOLS[@]}"; do
+    [ "${TZ_NEED[$i]}" = 1 ] || continue
+    IFS='|' read -r nm repo proj bins <<< "${TZ_TOOLS[$i]}"
+    ver="${TZ_LATEST[$i]}"; [ -n "$ver" ] || ver="$(gh_latest "$repo")" # the lookup may have failed
+    if [ -z "$ver" ]; then
+      step "Installing $nm"
+      failed "$nm (could not look up the latest release)"
+      continue
+    fi
+    step "Installing $nm $ver in ~/.local/bin"
+    d="${proj}_${ver#v}_${o}_$a"
+    b="${bins##* }"
+    if fetch_once "https://github.com/$repo/releases/download/$ver/$d.tar.gz" "$TMP/$proj.tgz" \
+       && tar -C "$TMP" -xzf "$TMP/$proj.tgz" && [ -x "$TMP/$d/$b" ]; then
+      for x in $bins; do [ -f "$TMP/$d/$x" ] && mv -f "$TMP/$d/$x" "$LOCAL_BIN/$x"; done
+      if [ -n "${TZ_CUR[$i]}" ]; then did "$nm $ver (was ${TZ_CUR[$i]})"; else did "$nm $ver"; fi
+    else
+      failed "$nm"
+    fi
+  done
+  # Downloads (tsz) go straight to ~/Downloads, no dialog each time. Your own files are kept.
+  if [ "$SETUP_SSH" = 1 ] && { [ "$OS" = Darwin ] || [ -d "$HOME/Downloads" ]; }; then
+    if [ ! -e "$HOME/.trzsz.conf" ]; then # used by `trzsz ssh`
+      mkdir -p "$HOME/Downloads"
+      printf 'DefaultDownloadPath = %s/Downloads/\n' "$HOME" > "$HOME/.trzsz.conf"
+    fi
+    # ~/.tssh.conf: read whether or not XDG_CONFIG_HOME is set (often it is not, e.g. on macOS)
+    if [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/tssh/tssh.conf" ] && [ ! -e "$HOME/.tssh.conf" ]; then
+      mkdir -p "$HOME/Downloads"
+      printf '%s\n' "# tssh settings (https://github.com/trzsz/trzsz-ssh#custom-configuration)" \
+        "# tsz saves here without asking" "DefaultDownloadPath = ~/Downloads" \
+        "# read ~/.ssh/config through ssh -G, so Match blocks work too" "UseOpenSSHConfig = yes" \
+        > "$HOME/.tssh.conf"
+      did "tssh settings (~/.tssh.conf): tsz saves into ~/Downloads"
+    fi
+  fi
+  if [ "$NEED_SSHCFG" = 1 ]; then
+    mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
+    [ -f "$SSH_CFG" ] || { : > "$SSH_CFG"; chmod 600 "$SSH_CFG"; }
+    printf '%s\n' "" "# dotfiles: where tssh finds tsshd on a server (it installs it in ~/.local/bin)." \
+      "# Lines starting with #!! are read by tssh only; ssh ignores them." \
+      "Host *" "  #!! TsshdPath ~/.local/bin/tsshd" >> "$SSH_CFG"
+    did "~/.ssh/config: TsshdPath ~/.local/bin/tsshd (Host * at the end)"
+  fi
+
+}
+job_lazygit() {
+  # ---------- lazygit (per user, Linux) ----------
+  # The lookup may have failed (network blip, or curl was installed only just now): try again
+  if [ "$NEED_LG" = 1 ] && [ -z "$LG_LATEST" ]; then LG_LATEST="$(gh_latest jesseduffield/lazygit)"; fi
+  if [ "$NEED_LG" = 1 ]; then
+    if [ -z "$LG_LATEST" ]; then
+      step "Installing lazygit"
+      failed "lazygit (could not look up the latest release)"
+    else
+      step "Installing lazygit $LG_LATEST in ~/.local/bin"
+      case "$ARCH" in amd64) a=x86_64 ;; arm64) a=arm64 ;; esac
+      if fetch_once "https://github.com/jesseduffield/lazygit/releases/download/$LG_LATEST/lazygit_${LG_LATEST#v}_Linux_$a.tar.gz" "$TMP/lazygit.tgz" \
+         && tar -C "$TMP" -xzf "$TMP/lazygit.tgz" lazygit && mv -f "$TMP/lazygit" "$LOCAL_BIN/lazygit"; then
+        if [ -n "$LG_CUR" ]; then did "lazygit $LG_LATEST (was $LG_CUR)"; else did "lazygit $LG_LATEST"; fi
+      else
+        failed "lazygit"
+      fi
+    fi
+  fi
+
+}
+job_uv() {
+  # ---------- uv and Python (per user) ----------
+  # uv installs into ~/.local/bin; `uv python install --default` adds python3 there too, so
+  # Mason's Python tools (and the user) get a recent Python with venv and pip, no sudo needed.
+  if [ "$NEED_UV" = 1 ] && [ -n "$UV_CUR" ]; then
+    step "Updating uv to ${UV_LATEST:-latest}"
+    if "$LOCAL_BIN/uv" self update -q; then did "uv $("$LOCAL_BIN/uv" --version | awk '{print $2}') (was $UV_CUR)"
+    else failed "uv update"; fi
+  elif [ "$NEED_UV" = 1 ]; then
+    step "Installing uv ${UV_LATEST:-latest} in ~/.local/bin"
+    fetch https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh "$TMP/uv-installer.sh"
+    if env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$LOCAL_BIN" sh "$TMP/uv-installer.sh" --quiet && [ -x "$LOCAL_BIN/uv" ]; then
+      did "uv $("$LOCAL_BIN/uv" --version | awk '{print $2}')"
+    else
+      failed "uv"
+    fi
+  fi
+  hash -r
+  if [ "$NEED_PY" = 1 ] && has uv; then
+    # Without a version, uv picks the newest stable Python
+    PY_ARG=(); [ -n "$PY_LATEST" ] && PY_ARG=("$PY_LATEST")
+    step "Installing Python ${PY_LATEST:-latest} with uv"
+    # --default (adds python / python3 next to python3.X) is marked experimental; hide that warning
+    if uv python install --default ${PY_ARG[@]+"${PY_ARG[@]}"} >"$TMP/uv-python.log" 2>&1 && [ -x "$LOCAL_BIN/python3" ]; then
+      hash -r; v="$("$LOCAL_BIN/python3" --version | awk '{print $2}')"
+      if [ -n "$PY_CUR" ]; then did "Python $v (was $PY_CUR)"; else did "Python $v"; fi
+    else
+      cat "$TMP/uv-python.log" >&2; failed "Python ${PY_LATEST:-latest} (uv)"
+    fi
+  fi
+
+}
+job_terminal() {
+  # ---------- Terminal: Nerd Font, Ghostty, iTerm2 ----------
+  if [ "$NEED_FONT" = 1 ] && [ "$PM" = brew ]; then
+    step "Installing JetBrainsMono Nerd Font"
+    if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask font-jetbrains-mono-nerd-font >/dev/null 2>&1; then
+      did "JetBrainsMono Nerd Font"
+    else failed "JetBrainsMono Nerd Font (brew install --cask font-jetbrains-mono-nerd-font)"; fi
+  elif [ "$NEED_FONT" = 1 ]; then
+    step "Installing JetBrainsMono Nerd Font ${FONT_VER:-latest} in ~/.local/share/fonts"
+    if [ -n "$FONT_VER" ]; then u="download/$FONT_VER"; else u="latest/download"; fi
+    u="https://github.com/ryanoasis/nerd-fonts/releases/$u/JetBrainsMono.tar.xz"
+    mkdir -p "$TMP/font"
+    if fetch_once "$u" "$TMP/font.tar.xz" && tar -xJf "$TMP/font.tar.xz" -C "$TMP/font" \
+       && ls "$TMP"/font/JetBrainsMonoNerdFont-*.ttf >/dev/null 2>&1; then
+      # The regular and Mono (single-width icons) families; not the NL / Propo variants
+      mkdir -p "$FONT_DIR"
+      cp "$TMP"/font/JetBrainsMonoNerdFont-*.ttf "$TMP"/font/JetBrainsMonoNerdFontMono-*.ttf "$FONT_DIR"/
+      if has fc-cache; then fc-cache -f "$FONT_DIR" >/dev/null 2>&1 || true; fi
+      did "JetBrainsMono Nerd Font${FONT_VER:+ $FONT_VER} (pick \"JetBrainsMono Nerd Font\" in your terminal's settings)"
+    else failed "JetBrainsMono Nerd Font ($u)"; fi
+  fi
+  if [ "$NEED_GHOSTTY" = 1 ]; then
+    step "Installing Ghostty"
+    if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask ghostty >/dev/null 2>&1; then did "Ghostty (config: ~/.config/ghostty/config)"
+    else failed "Ghostty (brew install --cask ghostty)"; fi
+  fi
+  if [ "$NEED_ITERM" = 1 ]; then
+    step "Setting up the iTerm2 profile"
+    mkdir -p "$ITERM_PROFILES"
+    # A copy, not a link: iTerm2 reads the folder at start and when files in it change
+    cp "$SRC/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"
+    # Default profile for new windows, and let programs (tmux, nvim over SSH) set the clipboard.
+    # iTerm2 saves its settings when it quits, so these apply after iTerm2 restarts.
+    defaults write com.googlecode.iterm2 "Default Bookmark Guid" -string "$ITERM_GUID"
+    defaults write com.googlecode.iterm2 AllowClipboardAccess -bool true
+    did "iTerm2 profile 'Dotfiles (Catppuccin Mocha)' (default; restart iTerm2 to use it)"
+  fi
+  if [ "$NEED_ITERM_THEME" = 1 ]; then
+    # 5 = Minimal (0 Light, 1 Dark, 4 Automatic, 6 Compact)
+    if defaults write com.googlecode.iterm2 TabStyleWithAutomaticOption -int 5; then
+      did "iTerm2 theme Minimal (restart iTerm2 to use it)"
+    else failed "iTerm2 theme"; fi
+  fi
+
+}
+job_claude() {
+    # Native installer: updates itself in the background, so it is only run when claude is missing
+    if [ "$NEED_CLAUDE" = 1 ] && [ -n "$CLAUDE_CUR" ]; then
+      step "Updating Claude Code to ${CLAUDE_LATEST:-latest}"
+      if claude update >/dev/null 2>&1; then did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}') (was $CLAUDE_CUR)"
+      else failed "Claude Code update (run: claude update)"; fi
+    elif [ "$NEED_CLAUDE" = 1 ]; then
+      step "Installing Claude Code ${CLAUDE_LATEST:-latest}"
+      fetch https://claude.ai/install.sh "$TMP/claude-install.sh"
+      bash "$TMP/claude-install.sh"
+      . "$STATE_DIR/env.sh"; hash -r
+      has claude && did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}')"
+    fi
+}
+job_mason() {
+  step "Installing and updating LSP servers, formatters and treesitter parsers"
+  # CFLAGS: tree-sitter's default flags include -Wall, which makes gcc 12.2 (Debian 12) spend
+  # minutes on large generated parsers such as gitcommit. config/options.lua sets the same default.
+  export CFLAGS="${CFLAGS:--O2}"
+  # DOTFILES_HEADLESS_INSTALL stops LazyVim's background parser builds; headless.lua builds them
+  # itself and waits for every Mason package and parser to finish (see nvim/lua/dotfiles/headless.lua)
+  # `cquit 1` runs only if install() itself failed to quit (e.g. a Lua error), so nvim never hangs
+  # Shows only what changes (Mason installs / updates, parser builds, errors); full log in a file
+  if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install()" \
+       -c "cquit 1" </dev/null 2>&1 | tee "$TMP/headless.log" \
+       | { grep --line-buffered -E 'mason: |treesitter round|^!!' || true; }; then
+    [ "$NEED_LAZY" = 1 ] && did "nvim plugins, LSP servers, formatters and parsers (latest)"
+    # "  mason: updating NAME A -> B" / "  mason: installing NAME V" lines from headless.lua
+    sed -n 's/^ *mason: updating \(.*\)/Mason \1/p; s/^ *mason: installing \(.*\)/Mason \1 (new)/p' "$TMP/headless.log" \
+      | tr -d '\r' > "$TMP/mason.done"
+    if [ "$NEED_LAZY" = 0 ]; then while IFS= read -r l; do did "$l"; done < "$TMP/mason.done"; fi
+  else
+    failed "some LSP servers or parsers (open nvim and check :Mason and :checkhealth)"
+    # Mason's own log has the full reason for each failure
+    MASON_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/nvim/mason.log"
+    if [ -f "$MASON_LOG" ]; then
+      note "Mason's own log: $MASON_LOG"
+      grep -i 'error\|fail' "$MASON_LOG" | tail -n 5 | cut -c1-300 >&2 || true
+    fi
+  fi
+
+}
+claude_setup_plugins() { # the official marketplace and the helpers for installing plugins and skills
+    MP=claude-plugins-official
+    claude plugin marketplace add "anthropics/$MP" >/dev/null 2>&1 || true
+    INSTALLED_PLUGINS="$(claude plugin list 2>/dev/null || true)"
+    claude_plugin() { # claude_plugin NAME [MARKETPLACE]
+      local mp="${2:-$MP}"
+      case "$INSTALLED_PLUGINS" in *"$1@$mp"*) return 0 ;; esac
+      if claude plugin install "$1@$mp" >/dev/null 2>&1; then did "Claude plugin $1"; else failed "Claude plugin $1@$mp"; fi
+    }
+    # A skill that is not packaged as a plugin: clone its repo and link the skill folder into
+    # ~/.claude/skills, where Claude Code picks up user skills
+    claude_skill() { # claude_skill NAME REPO PATH_IN_REPO
+      local dir="$DATA_HOME/claude-skills/${2//\//_}"
+      [ -e "$HOME/.claude/skills/$1" ] && return 0
+      [ -d "$dir/.git" ] || git clone -q --depth 1 "https://github.com/$2" "$dir" || { failed "Claude skill $1"; return; }
+      mkdir -p "$HOME/.claude/skills"
+      ln -sfn "$dir/$3" "$HOME/.claude/skills/$1" && did "Claude skill $1"
+    }
+}
+job_claude_plugins() {
+  # Settings, merged into ~/.claude/settings.json with Node.js; keys already set are kept:
+  #   attribution: Claude is not added as a co-author of commits and PRs ("" hides the text)
+  #   env.USE_BUILTIN_RIPGREP=0 on musl (Alpine), where the bundled ripgrep cannot run
+  if [ "$NEED_CLAUDE_ATTR" = 1 ] || [ "$PM" = apk ]; then
+    mkdir -p "$HOME/.claude"
+    if CLAUDE_SETTINGS="$CLAUDE_SETTINGS" MUSL="$([ "$PM" = apk ] && echo 1 || echo 0)" node -e '
+      const fs = require("fs"), f = process.env.CLAUDE_SETTINGS;
+      let s = {};
+      if (fs.existsSync(f)) s = JSON.parse(fs.readFileSync(f, "utf8") || "{}");
+      // "" hides the commit trailer / PR line; sessionUrl false drops the Claude-Session link.
+      // Keys the user already set are kept.
+      if (s.attribution === undefined || s.attribution === null) s.attribution = {};
+      if (typeof s.attribution === "object") {
+        if (s.attribution.commit === undefined) s.attribution.commit = "";
+        if (s.attribution.pr === undefined) s.attribution.pr = "";
+        if (s.attribution.sessionUrl === undefined) s.attribution.sessionUrl = false;
+      }
+      if (process.env.MUSL === "1") { s.env = s.env || {}; if (s.env.USE_BUILTIN_RIPGREP === undefined) s.env.USE_BUILTIN_RIPGREP = "0"; }
+      fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");
+    '; then
+      [ "$NEED_CLAUDE_ATTR" = 1 ] && did "Claude settings: no co-author or session link in commits and PRs"
+    else
+      failed "Claude settings (could not update ~/.claude/settings.json; is it valid JSON?)"
+    fi
+  fi
+  if [ "$NEED_GIT_HOOK" = 1 ]; then
+    if gitg config --global core.hooksPath "$GIT_HOOKS"; then did "git commit-msg hook (core.hooksPath $GIT_HOOKS)"
+    else failed "git commit-msg hook"; fi
+  fi
+  if has claude; then
+    step "Adding Claude Code plugins"
+    claude_setup_plugins
+    for p in ${CLAUDE_PLUGINS:-}; do
+      case "$(plugin_source "$p")" in
+        official) claude_plugin "$p" ;;
+        knowledge-work)
+          claude plugin marketplace add anthropics/knowledge-work-plugins >/dev/null 2>&1 || true
+          claude_plugin "$p" knowledge-work-plugins ;;
+        skill)
+          case "$p" in
+            vercel-react-best-practices) claude_skill "$p" vercel-labs/agent-skills skills/react-best-practices ;;
+            *) warn "unknown skill: $p" ;;
+          esac ;;
+      esac
+    done
+  else
+    failed "Claude Code (see https://code.claude.com/docs/en/troubleshoot-install)"
+  fi
+}
+
+# ---------- Tools, in parallel ----------
+# Each one downloads into its own place; nothing here asks anything (sudo was used above)
+[ "$NEED_NVIM" = 1 ] && job nvim "Neovim" job_nvim
+{ [ "$NEED_NODE" = 1 ] || [ "$NEED_TS" = 1 ]; } && job node "Node.js and tree-sitter CLI" job_node
+{ [ "$NEED_UV" = 1 ] || [ "$NEED_PY" = 1 ]; } && job uv "uv and Python" job_uv
+[ "$NEED_LG" = 1 ] && job lazygit "lazygit" job_lazygit
+SSH_TODO=0
+for i in "${!TZ_TOOLS[@]}"; do [ "${TZ_NEED[$i]}" = 1 ] && SSH_TODO=1; done
+[ "$NEED_SSHCFG" = 1 ] && SSH_TODO=1
+if [ "$SETUP_SSH" = 1 ] && [ ! -e "$HOME/.tssh.conf" ] && [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/tssh/tssh.conf" ]; then SSH_TODO=1; fi
+[ "$SSH_TODO" = 1 ] && job ssh "SSH tools" job_ssh
+{ [ "$NEED_FONT" = 1 ] || [ "$NEED_GHOSTTY" = 1 ] || [ "$NEED_ITERM" = 1 ] || [ "$NEED_ITERM_THEME" = 1 ]; } && job terminal "Terminal setup" job_terminal
+[ "$INSTALL_CLAUDE" = 1 ] && [ "$NEED_CLAUDE" = 1 ] && job claude "Claude Code" job_claude
+jobs_wait
+hash -r
+has nvim || die "Neovim is not installed"
+nvim_ok || warn "$(nvim --version 2>/dev/null | sed -n 1p) < 0.11, the config needs 0.11+"
+
+node_ok || warn "Node.js >= 18 not found, JS-based LSPs (pyright, ts_ls...) will fail"
+
+if ! has tree-sitter || ! ts_works tree-sitter; then
+  warn "tree-sitter CLI missing or broken, syntax highlighting parsers will not compile"
+fi
+# LazyVim installs tree-sitter-cli through Mason when none is on PATH (e.g. nvim was opened before
+# this step finished). That is the same glibc 2.39 build, so remove it if it cannot run here.
+MASON_DIR="$DATA_HOME/nvim/mason"
+if [ -e "$MASON_DIR/bin/tree-sitter" ] && ! "$MASON_DIR/bin/tree-sitter" --version >/dev/null 2>&1; then
+  step "Removing Mason's tree-sitter-cli (cannot run on this system)"
+  rm -rf "$MASON_DIR/packages/tree-sitter-cli" "$MASON_DIR/bin/tree-sitter"
+fi
+
+# shellcheck source=shell/env.sh
+. "$STATE_DIR/env.sh"; hash -r
+
 # ---------- nvim plugins, LSP servers, treesitter parsers (all headless) ----------
 # Everything is installed when missing and updated to the latest; each step is time-bounded.
 # Lazy sync: install missing plugins and update all of them to the latest commit
@@ -1550,158 +1829,19 @@ else
   failed "nvim plugins (Lazy sync failed or timed out, run :Lazy sync)"
 fi
 
-step "Installing and updating LSP servers, formatters and treesitter parsers"
-# CFLAGS: tree-sitter's default flags include -Wall, which makes gcc 12.2 (Debian 12) spend
-# minutes on large generated parsers such as gitcommit. config/options.lua sets the same default.
-export CFLAGS="${CFLAGS:--O2}"
-# DOTFILES_HEADLESS_INSTALL stops LazyVim's background parser builds; headless.lua builds them
-# itself and waits for every Mason package and parser to finish (see nvim/lua/dotfiles/headless.lua)
-# `cquit 1` runs only if install() itself failed to quit (e.g. a Lua error), so nvim never hangs
-# Shows only what changes (Mason installs / updates, parser builds, errors); full log in a file
-if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install()" \
-     -c "cquit 1" </dev/null 2>&1 | tee "$TMP/headless.log" \
-     | { grep --line-buffered -E 'mason: |treesitter round|^!!' || true; }; then
-  [ "$NEED_LAZY" = 1 ] && did "nvim plugins, LSP servers, formatters and parsers (latest)"
-  # "  mason: updating NAME A -> B" / "  mason: installing NAME V" lines from headless.lua
-  sed -n 's/^ *mason: updating \(.*\)/Mason \1/p; s/^ *mason: installing \(.*\)/Mason \1 (new)/p' "$TMP/headless.log" \
-    | tr -d '\r' > "$TMP/mason.done"
-  if [ "$NEED_LAZY" = 0 ]; then while IFS= read -r l; do did "$l"; done < "$TMP/mason.done"; fi
-else
-  failed "some LSP servers or parsers (open nvim and check :Mason and :checkhealth)"
-  # Mason's own log has the full reason for each failure
-  MASON_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/nvim/mason.log"
-  if [ -f "$MASON_LOG" ]; then
-    note "Mason's own log: $MASON_LOG"
-    grep -i 'error\|fail' "$MASON_LOG" | tail -n 5 | cut -c1-300 >&2 || true
-  fi
-fi
-
-# ---------- Terminal: Nerd Font, Ghostty, iTerm2 ----------
-if [ "$NEED_FONT" = 1 ] && [ "$PM" = brew ]; then
-  step "Installing JetBrainsMono Nerd Font"
-  if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask font-jetbrains-mono-nerd-font >/dev/null 2>&1; then
-    did "JetBrainsMono Nerd Font"
-  else failed "JetBrainsMono Nerd Font (brew install --cask font-jetbrains-mono-nerd-font)"; fi
-elif [ "$NEED_FONT" = 1 ]; then
-  step "Installing JetBrainsMono Nerd Font ${FONT_VER:-latest} in ~/.local/share/fonts"
-  if [ -n "$FONT_VER" ]; then u="download/$FONT_VER"; else u="latest/download"; fi
-  u="https://github.com/ryanoasis/nerd-fonts/releases/$u/JetBrainsMono.tar.xz"
-  mkdir -p "$TMP/font"
-  if fetch_once "$u" "$TMP/font.tar.xz" && tar -xJf "$TMP/font.tar.xz" -C "$TMP/font" \
-     && ls "$TMP"/font/JetBrainsMonoNerdFont-*.ttf >/dev/null 2>&1; then
-    # The regular and Mono (single-width icons) families; not the NL / Propo variants
-    mkdir -p "$FONT_DIR"
-    cp "$TMP"/font/JetBrainsMonoNerdFont-*.ttf "$TMP"/font/JetBrainsMonoNerdFontMono-*.ttf "$FONT_DIR"/
-    if has fc-cache; then fc-cache -f "$FONT_DIR" >/dev/null 2>&1 || true; fi
-    did "JetBrainsMono Nerd Font${FONT_VER:+ $FONT_VER} (pick \"JetBrainsMono Nerd Font\" in your terminal's settings)"
-  else failed "JetBrainsMono Nerd Font ($u)"; fi
-fi
-if [ "$NEED_GHOSTTY" = 1 ]; then
-  step "Installing Ghostty"
-  if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask ghostty >/dev/null 2>&1; then did "Ghostty (config: ~/.config/ghostty/config)"
-  else failed "Ghostty (brew install --cask ghostty)"; fi
-fi
-if [ "$NEED_ITERM" = 1 ]; then
-  step "Setting up the iTerm2 profile"
-  mkdir -p "$ITERM_PROFILES"
-  # A copy, not a link: iTerm2 reads the folder at start and when files in it change
-  cp "$SRC/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"
-  # Default profile for new windows, and let programs (tmux, nvim over SSH) set the clipboard.
-  # iTerm2 saves its settings when it quits, so these apply after iTerm2 restarts.
-  defaults write com.googlecode.iterm2 "Default Bookmark Guid" -string "$ITERM_GUID"
-  defaults write com.googlecode.iterm2 AllowClipboardAccess -bool true
-  did "iTerm2 profile 'Dotfiles (Catppuccin Mocha)' (default; restart iTerm2 to use it)"
-fi
-if [ "$NEED_ITERM_THEME" = 1 ]; then
-  # 5 = Minimal (0 Light, 1 Dark, 4 Automatic, 6 Compact)
-  if defaults write com.googlecode.iterm2 TabStyleWithAutomaticOption -int 5; then
-    did "iTerm2 theme Minimal (restart iTerm2 to use it)"
-  else failed "iTerm2 theme"; fi
-fi
-
-# ---------- Claude Code (optional, see the questions at the top) ----------
+# LSP servers / parsers (Mason, treesitter) and Claude Code's plugins, in parallel
+job mason "LSP servers, formatters and parsers" job_mason
+[ "$INSTALL_CLAUDE" = 1 ] && job claude_plugins "Claude Code plugins" job_claude_plugins
+jobs_wait
 if [ "$INSTALL_CLAUDE" = 1 ]; then
-  # Settings, merged into ~/.claude/settings.json with Node.js; keys already set are kept:
-  #   attribution: Claude is not added as a co-author of commits and PRs ("" hides the text)
-  #   env.USE_BUILTIN_RIPGREP=0 on musl (Alpine), where the bundled ripgrep cannot run
-  if [ "$NEED_CLAUDE_ATTR" = 1 ] || [ "$PM" = apk ]; then
-    mkdir -p "$HOME/.claude"
-    if CLAUDE_SETTINGS="$CLAUDE_SETTINGS" MUSL="$([ "$PM" = apk ] && echo 1 || echo 0)" node -e '
-      const fs = require("fs"), f = process.env.CLAUDE_SETTINGS;
-      let s = {};
-      if (fs.existsSync(f)) s = JSON.parse(fs.readFileSync(f, "utf8") || "{}");
-      // "" hides the commit trailer / PR line; sessionUrl false drops the Claude-Session link.
-      // Keys the user already set are kept.
-      if (s.attribution === undefined || s.attribution === null) s.attribution = {};
-      if (typeof s.attribution === "object") {
-        if (s.attribution.commit === undefined) s.attribution.commit = "";
-        if (s.attribution.pr === undefined) s.attribution.pr = "";
-        if (s.attribution.sessionUrl === undefined) s.attribution.sessionUrl = false;
-      }
-      if (process.env.MUSL === "1") { s.env = s.env || {}; if (s.env.USE_BUILTIN_RIPGREP === undefined) s.env.USE_BUILTIN_RIPGREP = "0"; }
-      fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");
-    '; then
-      [ "$NEED_CLAUDE_ATTR" = 1 ] && did "Claude settings: no co-author or session link in commits and PRs"
-    else
-      failed "Claude settings (could not update ~/.claude/settings.json; is it valid JSON?)"
-    fi
-  fi
-  if [ "$NEED_GIT_HOOK" = 1 ]; then
-    if gitg config --global core.hooksPath "$GIT_HOOKS"; then did "git commit-msg hook (core.hooksPath $GIT_HOOKS)"
-    else failed "git commit-msg hook"; fi
-  fi
-  # Native installer: updates itself in the background, so it is only run when claude is missing
-  if [ "$NEED_CLAUDE" = 1 ] && [ -n "$CLAUDE_CUR" ]; then
-    step "Updating Claude Code to ${CLAUDE_LATEST:-latest}"
-    if claude update >/dev/null 2>&1; then did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}') (was $CLAUDE_CUR)"
-    else failed "Claude Code update (run: claude update)"; fi
-  elif [ "$NEED_CLAUDE" = 1 ]; then
-    step "Installing Claude Code ${CLAUDE_LATEST:-latest}"
-    fetch https://claude.ai/install.sh "$TMP/claude-install.sh"
-    bash "$TMP/claude-install.sh"
-    . "$STATE_DIR/env.sh"; hash -r
-    has claude && did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}')"
-  fi
   if has claude; then
-    step "Adding Claude Code plugins"
-    # The official marketplace is only registered by the first interactive session, so add it here
-    MP=claude-plugins-official
-    claude plugin marketplace add "anthropics/$MP" >/dev/null 2>&1 || true
-    INSTALLED_PLUGINS="$(claude plugin list 2>/dev/null || true)"
-    claude_plugin() { # claude_plugin NAME [MARKETPLACE]
-      local mp="${2:-$MP}"
-      case "$INSTALLED_PLUGINS" in *"$1@$mp"*) return 0 ;; esac
-      if claude plugin install "$1@$mp" >/dev/null 2>&1; then did "Claude plugin $1"; else failed "Claude plugin $1@$mp"; fi
-    }
-    # A skill that is not packaged as a plugin: clone its repo and link the skill folder into
-    # ~/.claude/skills, where Claude Code picks up user skills
-    claude_skill() { # claude_skill NAME REPO PATH_IN_REPO
-      local dir="$DATA_HOME/claude-skills/${2//\//_}"
-      [ -e "$HOME/.claude/skills/$1" ] && return 0
-      [ -d "$dir/.git" ] || git clone -q --depth 1 "https://github.com/$2" "$dir" || { failed "Claude skill $1"; return; }
-      mkdir -p "$HOME/.claude/skills"
-      ln -sfn "$dir/$3" "$HOME/.claude/skills/$1" && did "Claude skill $1"
-    }
+    step "Adding Claude Code language-server plugins"
+    claude_setup_plugins
     # Language-server plugins: one per nvim language whose server is on PATH (Mason's bin is)
     for pair in pyright-lsp:pyright-langserver clangd-lsp:clangd typescript-lsp:typescript-language-server \
                 rust-analyzer-lsp:rust-analyzer lua-lsp:lua-language-server gopls-lsp:gopls; do
       if has "${pair#*:}"; then claude_plugin "${pair%%:*}"; fi
     done
-    for p in ${CLAUDE_PLUGINS:-}; do
-      case "$(plugin_source "$p")" in
-        official) claude_plugin "$p" ;;
-        knowledge-work)
-          claude plugin marketplace add anthropics/knowledge-work-plugins >/dev/null 2>&1 || true
-          claude_plugin "$p" knowledge-work-plugins ;;
-        skill)
-          case "$p" in
-            vercel-react-best-practices) claude_skill "$p" vercel-labs/agent-skills skills/react-best-practices ;;
-            *) warn "unknown skill: $p" ;;
-          esac ;;
-      esac
-    done
-  else
-    failed "Claude Code (see https://code.claude.com/docs/en/troubleshoot-install)"
   fi
 fi
 
