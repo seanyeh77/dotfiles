@@ -78,7 +78,7 @@ The leader key is `Space`. Press it and wait to see every binding.
 | `Space fy` / `Space fY` / `Space fl` | Copy the file's full path / relative path / path:line |
 | `Space fo` | Open the file in the system's app, e.g. a PDF in Preview (nvim shows only its first page) |
 | `Space gc` | Compare the file with a commit you pick (again to close) |
-| `Space gl`, then `Enter` | Compare the whole project with that commit: every changed file, your real files on the right (`gd` works there); `q` closes |
+| `Space gl`, then `Enter` | Compare the whole project with that commit: every changed file, your real files on the right (`gd` works there); `gm` shows the commit message, `q` closes |
 | `Space gg` | lazygit: stage, commit, push, browse history |
 | `:qa` | Quit |
 
