@@ -66,3 +66,17 @@ vim.keymap.set("n", "<leader>fo", function()
     vim.notify(err, vim.log.levels.ERROR)
   end
 end, { desc = "Open file in system app" })
+
+-- Space c i / c I: the class under the cursor's parent classes / the classes that inherit from it,
+-- in a list to jump through. Needs a language server with type hierarchy (clangd, jdtls; not pyright).
+local function type_hierarchy(kind)
+  return function()
+    if #vim.lsp.get_clients({ bufnr = 0, method = "textDocument/prepareTypeHierarchy" }) == 0 then
+      vim.notify("This file's language server cannot show class inheritance", vim.log.levels.WARN)
+      return
+    end
+    vim.lsp.buf.typehierarchy(kind)
+  end
+end
+vim.keymap.set("n", "<leader>ci", type_hierarchy("supertypes"), { desc = "Parent classes" })
+vim.keymap.set("n", "<leader>cI", type_hierarchy("subtypes"), { desc = "Child classes" })

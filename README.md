@@ -70,6 +70,8 @@ The leader key is `Space`. Press it and wait to see every binding.
 | `Ctrl-h/j/k/l` | Move between windows |
 | `gd` / `gr` / `K` | Definition / references / docs |
 | `Space cr` / `Space cf` | Rename / format |
+| `Space cs` | Outline: classes and their members (again to close) |
+| `Space ci` / `Space cI` | Parent classes / classes that inherit from this one (C++) |
 | `Ctrl-/` | Terminal |
 | `Space ac` / `Space as` | Open Claude / send the selection to Claude |
 | `Space aa` / `Space ad` | Accept / reject Claude's diff |
