@@ -1560,18 +1560,31 @@ job_uv() {
   # ---------- uv and Python (per user) ----------
   # uv installs into ~/.local/bin; `uv python install --default` adds python3 there too, so
   # Mason's Python tools (and the user) get a recent Python with venv and pip, no sudo needed.
+  # The installer of a given release installs exactly that release (releases/latest/... when unknown)
+  uv_installer() {
+    local url=https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh
+    [ -n "$UV_LATEST" ] && url="https://github.com/astral-sh/uv/releases/download/$UV_LATEST/uv-installer.sh"
+    fetch "$url" "$TMP/uv-installer.sh" &&
+      env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$LOCAL_BIN" sh "$TMP/uv-installer.sh" --quiet && [ -x "$LOCAL_BIN/uv" ]
+  }
+  uv_now() { "$LOCAL_BIN/uv" --version 2>/dev/null | awk '{print $2}'; }
   if [ "$NEED_UV" = 1 ] && [ -n "$UV_CUR" ]; then
     step "Updating uv to ${UV_LATEST:-latest}"
-    if "$LOCAL_BIN/uv" self update -q; then did "uv $("$LOCAL_BIN/uv" --version | awk '{print $2}') (was $UV_CUR)"
-    else failed "uv update"; fi
+    # Ask for the release the plan showed: plain `uv self update` asks uv's own release index, which can
+    # lag GitHub's latest release, report success and leave uv where it was. If that does not reach the
+    # wanted version, the installer of that release does.
+    "$LOCAL_BIN/uv" self update -q ${UV_LATEST:+"$UV_LATEST"} || true
+    if [ -n "$UV_LATEST" ] && [ "$(uv_now)" != "$UV_LATEST" ]; then
+      note "uv self update stayed at $(uv_now); using the $UV_LATEST installer"
+      uv_installer || true
+    fi
+    v="$(uv_now)"
+    if [ -z "$v" ]; then failed "uv update (uv no longer runs)"
+    elif [ "$v" = "$UV_CUR" ]; then failed "uv update: still $v${UV_LATEST:+, wanted $UV_LATEST}"
+    else did "uv $v (was $UV_CUR)"; fi
   elif [ "$NEED_UV" = 1 ]; then
     step "Installing uv ${UV_LATEST:-latest} in ~/.local/bin"
-    fetch https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh "$TMP/uv-installer.sh"
-    if env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$LOCAL_BIN" sh "$TMP/uv-installer.sh" --quiet && [ -x "$LOCAL_BIN/uv" ]; then
-      did "uv $("$LOCAL_BIN/uv" --version | awk '{print $2}')"
-    else
-      failed "uv"
-    fi
+    if uv_installer; then did "uv $(uv_now)"; else failed "uv"; fi
   fi
   hash -r
   if [ "$NEED_PY" = 1 ] && has uv; then
