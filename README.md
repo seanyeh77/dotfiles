@@ -29,6 +29,7 @@ No copy of this repo stays behind: the files are copied into place (`~/.config/n
 - **iTerm2** (macOS): a profile with Catppuccin Mocha, JetBrainsMono Nerd Font and Option as Alt, made the default, and the Minimal theme (title bar in the terminal's colour, if you never picked a theme); restart iTerm2.
 - **Ghostty**: `ghostty/config` with the same theme. Unlike iTerm2 it shows images inside nvim, also over SSH and in tmux.
 - On macOS both are set up when installed; Ghostty is installed only when you run the installer in it.
+- **Updates** (macOS): an older Ghostty or iTerm2 is updated to the release its own updater offers. One that is open (e.g. the one running the installer) is left alone, and the summary says to use its menu, *Check for Updates*.
 - **Font**: JetBrainsMono Nerd Font is installed on macOS and on a Linux desktop. Servers you ssh into need none: your own terminal draws the text. Elsewhere, pick a [Nerd Font](https://www.nerdfonts.com) in your terminal, or icons show as boxes.
 - **Over SSH**: copying in nvim and tmux reaches your local clipboard (OSC 52), and Ghostty presents itself as `xterm-256color`, so servers need no setup.
 
