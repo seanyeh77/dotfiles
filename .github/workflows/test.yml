@@ -55,6 +55,26 @@ jobs:
             echo "$sh: $out"
             case "$out" in "ran in bash"*) ;; *) echo "::error title=hand-over from $sh::$out"; exit 1 ;; esac
           done
+      # An outdated terminal app that is not running is replaced with the release from its update feed
+      - name: an old Ghostty is updated
+        if: runner.os == 'macOS'
+        shell: bash -o pipefail {0}
+        env:
+          DOTFILES_DIR: ${{ github.workspace }}
+          DOTFILES_TERMINAL: ghostty
+          SETUP_TERMINAL: '1'
+          INSTALL_CLAUDE: '0'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/old.dmg" https://release.files.ghostty.org/1.3.1/Ghostty.dmg
+          hdiutil attach -nobrowse -readonly -quiet -mountpoint "$RUNNER_TEMP/old" "$RUNNER_TEMP/old.dmg"
+          rm -rf /Applications/Ghostty.app && ditto "$RUNNER_TEMP/old/Ghostty.app" /Applications/Ghostty.app
+          hdiutil detach -quiet "$RUNNER_TEMP/old"
+          before="$(defaults read /Applications/Ghostty.app/Contents/Info CFBundleShortVersionString)"
+          /bin/bash install.sh 2>&1 | tee "$RUNNER_TEMP/install-ghostty.log" | grep -i ghostty || true
+          after="$(defaults read /Applications/Ghostty.app/Contents/Info CFBundleShortVersionString)"
+          echo "Ghostty $before -> $after"
+          if [ "$before" = "$after" ]; then echo "::error title=Ghostty not updated::still $after"; exit 1; fi
+          codesign --verify --deep /Applications/Ghostty.app
       - name: verify claude
         if: matrix.claude
         run: >-

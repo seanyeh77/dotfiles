@@ -765,11 +765,25 @@ lk_python() {
   timeout_cmd 60 "$(command -v uv)" python list 2>/dev/null \
     | sed -n 's/^cpython-\([0-9]*\.[0-9]*\.[0-9]*\)-.*/\1/p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1
 }
+lk_appcast() { # lk_appcast URL: "VERSION ZIP-URL" of the newest release in a macOS app's update feed (Sparkle)
+  # Ghostty gives the version as <sparkle:shortVersionString>, iTerm2 as sparkle:version="..."; perl, because
+  # macOS awk / sed cannot split on <item>
+  fetch_quiet "$1" | perl -0ne '
+    while (/<item>(.*?)<\/item>/sg) {
+      my $i = $1; my $v;
+      if ($i =~ /<sparkle:shortVersionString>(\d+(?:\.\d+)+)</) { $v = $1 }
+      elsif ($i =~ /sparkle:version="(\d+(?:\.\d+)+)"/) { $v = $1 }
+      print "$v $1\n" if defined $v && $i =~ /<enclosure[^>]*\burl="([^"]+)"/;
+    }' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1
+}
 lk_claude() {
   # Same version numbers as the native build
   fetch_quiet https://registry.npmjs.org/@anthropic-ai/claude-code/latest | grep -o '"version":"[^"]*"' | sed -n '1s/.*:"\(.*\)"/\1/p'
 }
 [ "$USE_PM_NVIM" = 0 ] && lookup nvim "Neovim" gh_latest neovim/neovim
+# Installed terminal apps on macOS: their own update feeds (brew's casks can lag a release by days)
+[ "$USE_GHOSTTY" = 1 ] && [ -d /Applications/Ghostty.app ] && lookup ghostty_app "Ghostty" lk_appcast https://release.files.ghostty.org/appcast.xml
+[ "$USE_ITERM" = 1 ] && [ -d /Applications/iTerm.app ] && lookup iterm_app "iTerm2" lk_appcast https://iterm2.com/appcasts/final_modern.xml
 [ "$USE_PM_NODE" = 0 ] && lookup node "Node.js LTS" lk_node
 if [ "$USE_PM_TOOLS" = 0 ]; then
   lookup ts "tree-sitter CLI" gh_latest tree-sitter/tree-sitter
@@ -1066,6 +1080,30 @@ if [ "$USE_GHOSTTY" = 1 ] && [ ! -d /Applications/Ghostty.app ]; then
   NEED_GHOSTTY=1
   user_plan "Ghostty" "new, brew install --cask (terminal that shows images in nvim)"
 fi
+
+# Newer releases of installed terminal apps. An app that is open is left alone (replacing a running app
+# can crash it, and this script may be running inside it): its own updater does it in one click.
+# A closed one is replaced with the official download from that same update feed.
+ver_lt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" = "$1" ]; }
+TERM_UPD=() # "Name|/Applications/X.app|current|latest|zip url"
+TERM_NEXT=(); NEED_TERM_UPD=0
+for t in "Ghostty|/Applications/Ghostty.app|ghostty_app|ghostty|Ghostty > Check for Updates..." \
+         "iTerm2|/Applications/iTerm.app|iterm_app|iTerm2|iTerm2 > Check for Updates..."; do
+  IFS='|' read -r name app key proc menu <<< "$t"
+  r="$(lookup_result "$key")"; [ -n "$r" ] && [ -d "$app" ] || continue
+  latest="${r%% *}"; url="${r#* }"
+  cur="$(defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)"
+  [ -n "$cur" ] && ver_lt "$cur" "$latest" || continue
+  if pgrep -xq "$proc"; then
+    warn "$name $latest is out (you have $cur); it is open, so update it from its menu: $menu"
+    TERM_NEXT+=("Update $name to $latest: $menu (it restarts $name)")
+  elif [ -w "$(dirname "$app")" ] && [ -w "$app" ]; then
+    TERM_UPD+=("$name|$app|$cur|$latest|$url"); NEED_TERM_UPD=1
+    user_plan "$name" "$(change "$cur" "$latest" "official download, replaces $app")"
+  else
+    warn "$name $latest is out (you have $cur); $app is not writable for you, so update it from its menu: $menu"
+  fi
+done
 
 FONT_DIR="$DATA_HOME/fonts/JetBrainsMonoNerdFont" # Linux
 font_installed() {
@@ -1601,6 +1639,18 @@ job_uv() {
   fi
 
 }
+unpack_app() { # unpack_app URL FILE DIR: the .app from a .dmg (Ghostty) or .zip (iTerm2) download, into DIR
+  case "$1" in
+    *.dmg)
+      local mnt="$3.mnt" ok=1
+      mkdir -p "$mnt"
+      hdiutil attach -nobrowse -readonly -quiet -mountpoint "$mnt" "$2" || return 1
+      ditto "$mnt"/*.app "$3/$(basename "$mnt"/*.app)" || ok=0
+      hdiutil detach -quiet "$mnt" || true
+      [ "$ok" = 1 ] ;;
+    *) ditto -x -k "$2" "$3" ;;
+  esac
+}
 job_terminal() {
   # ---------- Terminal: Nerd Font, Ghostty, iTerm2 ----------
   if [ "$NEED_FONT" = 1 ] && [ "$PM" = brew ]; then
@@ -1627,6 +1677,20 @@ job_terminal() {
     if HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask ghostty >/dev/null 2>&1; then did "Ghostty (config: ~/.config/ghostty/config)"
     else failed "Ghostty (brew install --cask ghostty)"; fi
   fi
+  local t name app cur latest url now
+  for t in ${TERM_UPD[@]+"${TERM_UPD[@]}"}; do
+    IFS='|' read -r name app cur latest url <<< "$t"
+    step "Updating $name to $latest"
+    rm -rf "$TMP/app-$name"; mkdir -p "$TMP/app-$name"
+    if fetch_once "$url" "$TMP/app-$name.dl" && unpack_app "$url" "$TMP/app-$name.dl" "$TMP/app-$name" \
+       && [ -d "$TMP/app-$name/${app##*/}" ]; then
+      # Move the old app aside first, so a failed move puts it back
+      if mv "$app" "$TMP/app-$name.old" && { mv "$TMP/app-$name/${app##*/}" "$app" || { mv "$TMP/app-$name.old" "$app"; false; }; }; then
+        now="$(defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)"
+        did "$name $now (was $cur)"
+      else failed "$name update (could not replace $app)"; fi
+    else failed "$name update ($url)"; fi
+  done
   if [ "$NEED_ITERM" = 1 ]; then
     step "Setting up the iTerm2 profile"
     mkdir -p "$ITERM_PROFILES"
@@ -1816,7 +1880,8 @@ for i in "${!TZ_TOOLS[@]}"; do [ "${TZ_NEED[$i]}" = 1 ] && SSH_TODO=1; done
 [ "$NEED_SSHCFG" = 1 ] && SSH_TODO=1
 if [ "$SETUP_SSH" = 1 ] && [ ! -e "$HOME/.tssh.conf" ] && [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/tssh/tssh.conf" ]; then SSH_TODO=1; fi
 [ "$SSH_TODO" = 1 ] && job ssh "SSH tools" job_ssh
-{ [ "$NEED_FONT" = 1 ] || [ "$NEED_GHOSTTY" = 1 ] || [ "$NEED_ITERM" = 1 ] || [ "$NEED_ITERM_THEME" = 1 ]; } && job terminal "Terminal setup" job_terminal
+{ [ "$NEED_FONT" = 1 ] || [ "$NEED_GHOSTTY" = 1 ] || [ "$NEED_ITERM" = 1 ] || [ "$NEED_ITERM_THEME" = 1 ] \
+  || [ "$NEED_TERM_UPD" = 1 ]; } && job terminal "Terminal setup" job_terminal
 [ "$INSTALL_CLAUDE" = 1 ] && [ "$NEED_CLAUDE" = 1 ] && job claude "Claude Code" job_claude
 jobs_wait
 hash -r
@@ -1889,6 +1954,7 @@ fi
 
 # ---------- Next steps (on every run, so nothing is forgotten) ----------
 NEXT=("Open a new shell, then run nvim or tmux (:checkhealth and :Mason show the details)")
+NEXT+=(${TERM_NEXT[@]+"${TERM_NEXT[@]}"})
 [ "${DOCKER_RELOGIN:-0}" = 1 ] && NEXT+=("Docker: log out and back in (or run: newgrp docker), then docker runs without sudo")
 [ "${DOCKER_NO_SERVICE:-0}" = 1 ] && NEXT+=("Docker: no systemd here, so the daemon was not started (run: sudo dockerd &)")
 [ "$NEED_DOCKER" = 1 ] && [ "$PM" = brew ] && NEXT+=("Docker: open Docker Desktop once (Applications) to finish its setup")
