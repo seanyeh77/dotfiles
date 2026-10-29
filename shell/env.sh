@@ -16,6 +16,23 @@ esac
 unset _d
 export PATH
 
+# A shell started in a folder that has been deleted (typically a new tmux pane split from a pane
+# whose folder was removed) cannot tell where it is: prompts show ".", git and other tools fail.
+# Go back into the folder if it was recreated, otherwise start in ~. Only interactive shells.
+case "$-" in *i*)
+  case "$(command pwd -P 2>/dev/null)" in
+    /*) ;;
+    *) case "${PWD:-}" in
+         /*) cd -- "$PWD" 2>/dev/null || true ;;
+       esac
+       case "$(command pwd -P 2>/dev/null)" in
+         /*) ;;
+         *) printf 'dotfiles: this folder no longer exists, starting in ~\n' >&2
+            cd ~ 2>/dev/null || cd / ;;
+       esac ;;
+  esac ;;
+esac
+
 # Ghostty shell integration (zsh), loaded by hand in case auto-injection did not happen
 # (e.g. ZDOTDIR is changed): it wraps `ssh` so remote hosts see TERM=xterm-256color
 # (Ctrl-L, colours). No-op outside Ghostty or when it is already loaded.
