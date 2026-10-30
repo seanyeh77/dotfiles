@@ -1056,13 +1056,20 @@ if [ -n "$MISS_PLUGINS" ]; then
 fi
 # Claude Code settings this installer manages in ~/.claude/settings.json (only keys that are unset)
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
-NEED_CLAUDE_ATTR=0; NEED_GIT_HOOK=0
+NEED_CLAUDE_ATTR=0; NEED_CLAUDE_PUSH=0; NEED_GIT_HOOK=0
 GIT_HOOKS="$STATE_DIR/git/hooks"
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   if ! grep -qs '"attribution"' "$CLAUDE_SETTINGS" || ! grep -qs '"sessionUrl"' "$CLAUDE_SETTINGS"; then
     NEED_CLAUDE_ATTR=1
     user_plan "Claude settings" "no Co-Authored-By / Claude-Session in commits, no attribution in PRs"
   fi
+  # Phone notifications (both off by default): when Claude finishes or decides to tell you, and when it
+  # waits for you. They need a Remote Control session; without one they do nothing. Skipped when set
+  # anywhere already, including by /config (which may keep them in ~/.claude.json).
+  for k in agentPushNotifEnabled inputNeededNotifEnabled; do
+    grep -qs "\"$k\"" "$CLAUDE_SETTINGS" "$HOME/.claude.json" || NEED_CLAUDE_PUSH=1
+  done
+  [ "$NEED_CLAUDE_PUSH" = 1 ] && user_plan "Claude settings" "phone notifications on: when Claude is done and when it needs you (with Remote Control)"
   # Second layer: a global commit-msg hook strips those lines from any commit, and runs each
   # repository's own hooks too. Only when no other global hooks path is set.
   v="$(gitg config --global core.hooksPath 2>/dev/null || true)"
@@ -1821,10 +1828,11 @@ claude_setup_plugins() { # the official marketplace and the helpers for installi
 job_claude_plugins() {
   # Settings, merged into ~/.claude/settings.json with Node.js; keys already set are kept:
   #   attribution: Claude is not added as a co-author of commits and PRs ("" hides the text)
+  #   agentPushNotifEnabled / inputNeededNotifEnabled: push to the Claude phone app (Remote Control)
   #   env.USE_BUILTIN_RIPGREP=0 on musl (Alpine), where the bundled ripgrep cannot run
-  if [ "$NEED_CLAUDE_ATTR" = 1 ] || [ "$PM" = apk ]; then
+  if [ "$NEED_CLAUDE_ATTR" = 1 ] || [ "$NEED_CLAUDE_PUSH" = 1 ] || [ "$PM" = apk ]; then
     mkdir -p "$HOME/.claude"
-    if CLAUDE_SETTINGS="$CLAUDE_SETTINGS" MUSL="$([ "$PM" = apk ] && echo 1 || echo 0)" node -e '
+    if CLAUDE_SETTINGS="$CLAUDE_SETTINGS" PUSH="$NEED_CLAUDE_PUSH" MUSL="$([ "$PM" = apk ] && echo 1 || echo 0)" node -e '
       const fs = require("fs"), f = process.env.CLAUDE_SETTINGS;
       let s = {};
       if (fs.existsSync(f)) s = JSON.parse(fs.readFileSync(f, "utf8") || "{}");
@@ -1836,10 +1844,14 @@ job_claude_plugins() {
         if (s.attribution.pr === undefined) s.attribution.pr = "";
         if (s.attribution.sessionUrl === undefined) s.attribution.sessionUrl = false;
       }
+      if (process.env.PUSH === "1") {
+        for (const k of ["agentPushNotifEnabled", "inputNeededNotifEnabled"]) if (s[k] === undefined) s[k] = true;
+      }
       if (process.env.MUSL === "1") { s.env = s.env || {}; if (s.env.USE_BUILTIN_RIPGREP === undefined) s.env.USE_BUILTIN_RIPGREP = "0"; }
       fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");
     '; then
       [ "$NEED_CLAUDE_ATTR" = 1 ] && did "Claude settings: no co-author or session link in commits and PRs"
+      [ "$NEED_CLAUDE_PUSH" = 1 ] && did "Claude settings: phone notifications on (they arrive while Remote Control is on: /remote-control)"
     else
       failed "Claude settings (could not update ~/.claude/settings.json; is it valid JSON?)"
     fi

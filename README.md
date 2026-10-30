@@ -40,6 +40,7 @@ Pick it and its plugins in the checklist (all on by default).
 - Workflow: commit-commands, code-review, feature-dev, security-guidance, code-simplifier, claude-md-management, superpowers, context7
 - Frontend: frontend-design, playwright, design, vercel-react-best-practices
 - Language-server plugins for the languages nvim supports
+- Phone notifications are on: the Claude app on your phone gets a push when Claude is done and when it waits for you (a permission or a question). They arrive while the session has Remote Control on (`/remote-control`); turn either off in `/config` (*Push when Claude decides*, *Push when actions required*), later runs keep your choice.
 - Claude is never added as a co-author: Claude Code is set not to add `Co-Authored-By` or session links, and a global git `commit-msg` hook removes those lines from any commit (each repository's own hooks still run).
 - At the end the installer lists the MCP servers that still need a sign-in (run `/mcp` in Claude).
 

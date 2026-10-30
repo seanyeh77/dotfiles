@@ -39,6 +39,10 @@ node -e 'const s = require(process.env.HOME + "/.claude/settings.json");
   const a = s.attribution || {};
   process.exit(a.commit === "" && a.pr === "" && a.sessionUrl === false ? 0 : 1)'
 check "settings: no co-author attribution" $?
+# Phone notifications on (they only arrive with Remote Control)
+node -e 'const s = require(process.env.HOME + "/.claude/settings.json");
+  process.exit(s.agentPushNotifEnabled === true && s.inputNeededNotifEnabled === true ? 0 : 1)'
+check "settings: phone notifications on" $?
 # The global commit-msg hook removes Claude co-author lines and keeps other co-authors
 t="$(mktemp -d)"
 git -C "$t" init -q && git -C "$t" -c user.name=ci -c user.email=ci@example.com commit -q --allow-empty \
