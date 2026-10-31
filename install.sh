@@ -75,10 +75,15 @@ else
   SPIN_FRAMES=("|" "/" "-" "\\")
 fi
 COLS=80
-if [ "$HAS_TTY" = 1 ]; then
+# Measured again before each redraw: a line longer than the window (after it was made narrower, or
+# a tmux pane was split) wraps, the redraw then lands one line too low and the screen fills with copies
+term_cols() {
+  [ "$HAS_TTY" = 1 ] || return 0
+  local c
   c="$(stty size </dev/tty 2>/dev/null | awk '{print $2}' || true)"
   case "$c" in ''|*[!0-9]*) ;; *) [ "$c" -gt 20 ] && COLS="$c" ;; esac
-fi
+}
+term_cols
 [ "$UI" = 1 ] && exec >>"$INSTALL_LOG" 2>&1
 
 SPIN_PID=""; STEP_LABEL=""; STEP_T0=0; STEP_BAD=0; STEP_MSGS=()
@@ -90,6 +95,7 @@ spin_start() {
     trap - INT TERM; exec 2>/dev/null
     i=0; nf=${#SPIN_FRAMES[@]}
     while :; do
+      [ $((i % 5)) = 0 ] && term_cols
       d="$(tail -n 1 "$INSTALL_LOG" 2>/dev/null | tr -d '\r' | sed "s/${ESC}\[[0-9;?]*[A-Za-z]//g; /^==> /d; /^!! /d" || true)"
       w=$((COLS - ${#label} - 14)); [ "$w" -gt 0 ] || w=0
       printf '\r%s[K  %s%s%s %s %s%ss  %s%s' "$ESC" "$TC" "${SPIN_FRAMES[$((i % nf))]}" "$TN" "$label" \
@@ -182,6 +188,7 @@ job() { # job NAME LABEL FUNCTION
 }
 jobs_draw() { # one line per job; FINAL=1 draws the result instead of the spinner
   local i jd lab rc m d el w
+  [ $((J_TICK % 5)) = 0 ] && term_cols
   for i in "${!J_NAMES[@]}"; do
     jd="$TMP/job.${J_NAMES[$i]}"; lab="$(cat "$jd.label" 2>/dev/null || true)"
     if [ -f "$jd.rc" ]; then
