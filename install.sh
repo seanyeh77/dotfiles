@@ -258,10 +258,13 @@ export PATH
 # Download with curl, falling back to wget; retry a few times so a network blip does not
 # abort the whole install
 fetch_once() { # fetch_once URL [OUTFILE]
+  # A download that stalls (under 1 KB/s for a minute) is given up and retried by fetch(), instead
+  # of hanging the install forever behind a spinner
+  local c=(curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 60)
   if has curl; then
-    if [ $# -ge 2 ]; then curl -fsSL --connect-timeout 20 -o "$2" "$1"; else curl -fsSL --connect-timeout 20 "$1"; fi
+    if [ $# -ge 2 ]; then "${c[@]}" -o "$2" "$1"; else "${c[@]}" "$1"; fi
   elif has wget; then
-    if [ $# -ge 2 ]; then wget -qO "$2" "$1"; else wget -qO- "$1"; fi
+    if [ $# -ge 2 ]; then wget -q -T 60 -t 1 -O "$2" "$1"; else wget -q -T 60 -t 1 -O- "$1"; fi
   else die "Need curl or wget"; fi
 }
 # For version lookups: never fails, prints nothing when there is no curl / wget yet
@@ -1721,7 +1724,8 @@ job_claude() {
     # Native installer: updates itself in the background, so it is only run when claude is missing
     if [ "$NEED_CLAUDE" = 1 ] && [ -n "$CLAUDE_CUR" ]; then
       step "Updating Claude Code to ${CLAUDE_LATEST:-latest}"
-      if claude update >/dev/null 2>&1; then did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}') (was $CLAUDE_CUR)"
+      # At most 10 minutes: a `claude update` that waits on the network must not hold up the install
+      if with_timeout 600 claude update >/dev/null 2>&1; then did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}') (was $CLAUDE_CUR)"
       else failed "Claude Code update (run: claude update)"; fi
     elif [ "$NEED_CLAUDE" = 1 ]; then
       step "Installing Claude Code ${CLAUDE_LATEST:-latest}"
