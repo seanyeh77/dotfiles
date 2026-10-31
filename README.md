@@ -54,6 +54,7 @@ Set them before `bash`, e.g. `curl -fsSL seanyeh77.github.io/dotfiles | DOTFILES
 | `INSTALL_CLAUDE`, `CLAUDE_PLUGINS="a b"`, `INSTALL_DOCKER`, `SETUP_TERMINAL`, `INSTALL_FONT`, `SETUP_SSH` | Preset the choices (`1` or `0`) |
 | `ASSUME_YES=1` | Do not ask before installing |
 | `DOTFILES_PLAIN=1` | No spinner: every command's output on screen |
+| `DOTFILES_SERIAL=1` / `0` | One step at a time / always in parallel (default: one at a time when under 2 GB of memory is free) |
 | `NO_SUDO=1` / `USE_SUDO=1` | Never use sudo / ask for the sudo password even if you are not in an admin group |
 | `PYTHON_VERSION=3.13` | Pin Python instead of the latest |
 | `DOTFILES_TERMINAL=iterm2\|ghostty\|none` | Set up only that terminal (`ghostty` installs it if missing) |

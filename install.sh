@@ -176,6 +176,9 @@ job() { # job NAME LABEL FUNCTION
     echo "$rc" > "$jd.rc"
   ) &
   J_NAMES+=("$name"); J_PIDS+=("$!"); J_T0+=("$SECONDS")
+  # Little memory: one step at a time (see SERIAL)
+  [ "${SERIAL:-0}" = 1 ] && jobs_wait
+  return 0
 }
 jobs_draw() { # one line per job; FINAL=1 draws the result instead of the spinner
   local i jd lab rc m d el w
@@ -733,6 +736,25 @@ git_update() { # git_update DIR: "OLD NEW COUNT" when the upstream is ahead, emp
     "$(git -c safe.directory="$d" -C "$d" rev-parse --short '@{u}')" "$n"
 }
 timeout_cmd() { with_timeout "$@" </dev/null; }
+
+# How much may run at once. A small VM (1-2 GB) froze solid when Node.js, Claude Code and the rest
+# downloaded and unpacked side by side, and compiling treesitter parsers starts one compiler per parser.
+# With under 2 GB free, the steps run one after another and Mason installs 2 packages at a time;
+# parsers compile one per 512 MB free (at most one per CPU). DOTFILES_SERIAL=1 / 0 forces either way.
+CPUS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
+MEM_FREE_MB=""
+[ -r /proc/meminfo ] && MEM_FREE_MB="$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)"
+SERIAL="${DOTFILES_SERIAL:-}"
+if [ -z "$SERIAL" ]; then
+  SERIAL=0; [ -n "$MEM_FREE_MB" ] && [ "$MEM_FREE_MB" -lt 2048 ] && SERIAL=1
+fi
+BUILD_JOBS="$CPUS"
+if [ -n "$MEM_FREE_MB" ] && [ $((MEM_FREE_MB / 512)) -lt "$BUILD_JOBS" ]; then BUILD_JOBS=$((MEM_FREE_MB / 512)); fi
+[ "$BUILD_JOBS" -ge 1 ] 2>/dev/null || BUILD_JOBS=1
+[ "$SERIAL" = 1 ] && [ "$BUILD_JOBS" -gt 2 ] && BUILD_JOBS=2
+MASON_JOBS=16; [ "$SERIAL" = 1 ] && MASON_JOBS=2
+export DOTFILES_BUILD_JOBS="$BUILD_JOBS" DOTFILES_MASON_JOBS="$MASON_JOBS"
+[ "$SERIAL" = 1 ] && [ -z "${DOTFILES_SERIAL:-}" ] && log "${MEM_FREE_MB} MB of memory free: installing one step at a time, so the machine stays responsive"
 
 # The network lookups run in parallel in the background; each writes its answer to a file and
 # is reported as it finishes, so a slow one does not hold up the others.

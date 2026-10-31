@@ -102,9 +102,10 @@ return {
       _G.DOTFILES.mason_tools = vim.deepcopy(opts.ensure_installed)
       -- During install.sh, headless.lua is the only installer (see the treesitter note below), and
       -- installs 16 packages at a time instead of 4: most of the time goes into waiting for downloads
+      -- (2 on a machine with little free memory, see DOTFILES_MASON_JOBS in install.sh)
       if vim.env.DOTFILES_HEADLESS_INSTALL == "1" then
         opts.ensure_installed = {}
-        opts.max_concurrent_installers = 16
+        opts.max_concurrent_installers = tonumber(vim.env.DOTFILES_MASON_JOBS) or 16
       end
     end,
   },

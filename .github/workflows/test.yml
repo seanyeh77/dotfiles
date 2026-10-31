@@ -205,7 +205,7 @@ jobs:
         run: |
           for u in alice bob; do
             cp -r "$GITHUB_WORKSPACE" "/home/$u/dotfiles" && chown -R "$u:$u" "/home/$u/dotfiles"
-            su - "$u" -c "INSTALL_DOCKER=1 DOTFILES_DIR=/home/$u/dotfiles bash /home/$u/dotfiles/install.sh" 2>&1 | tee -a "$RUNNER_TEMP/install.log"
+            su - "$u" -c "INSTALL_DOCKER=1 DOTFILES_SERIAL=1 DOTFILES_DIR=/home/$u/dotfiles bash /home/$u/dotfiles/install.sh" 2>&1 | tee -a "$RUNNER_TEMP/install.log"
           done
           # Docker needs sudo: it is not planned, and the user is told why
           grep -q "Docker needs sudo" "$RUNNER_TEMP/install.log"

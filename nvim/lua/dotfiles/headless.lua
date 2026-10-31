@@ -140,6 +140,9 @@ end
 --- Compile every treesitter parser (two rounds: parallel builds occasionally fail).
 ---@return string[] missing
 local function install_ts(langs, timeout_ms)
+  -- Compilers at once: install.sh sets it from the CPUs and the free memory (nvim-treesitter's own
+  -- default is 100, which can run a small VM out of memory)
+  local jobs = tonumber(vim.env.DOTFILES_BUILD_JOBS)
   local TS = require("nvim-treesitter")
   local lock = (vim.env.XDG_CACHE_HOME or (vim.env.HOME .. "/.cache")) .. "/tree-sitter/lock"
   local function missing()
@@ -161,7 +164,7 @@ local function install_ts(langs, timeout_ms)
       os.remove(f) -- stale locks left by an interrupted build
     end
     pcall(function()
-      TS.install(todo):wait(timeout_ms)
+      TS.install(todo, { max_jobs = jobs }):wait(timeout_ms)
     end)
   end
   return missing()
@@ -197,7 +200,7 @@ function M.install(what)
       missing = install_ts(want.ts, 5 * 60 * 1000)
       -- Rebuild parsers whose revision changed in the updated nvim-treesitter
       pcall(function()
-        require("nvim-treesitter").update():wait(5 * 60 * 1000)
+        require("nvim-treesitter").update(nil, { max_jobs = tonumber(vim.env.DOTFILES_BUILD_JOBS) }):wait(5 * 60 * 1000)
       end)
       if #missing > 0 then
         out("!! treesitter parsers not installed: " .. table.concat(missing, ", "))
