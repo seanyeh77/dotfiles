@@ -34,6 +34,9 @@ jobs:
         env:
           DOTFILES_DIR: ${{ github.workspace }}
           INSTALL_CLAUDE: ${{ matrix.claude && '1' || '0' }}
+          # ntfy hooks (Claude job only), with a throwaway topic on the public server
+          CLAUDE_NTFY: ${{ matrix.claude && '1' || '0' }}
+          NTFY_TOPIC: ${{ matrix.claude && format('dotfiles-ci-{0}', github.run_id) || '' }}
           CLAUDE_PLUGINS: >-
             commit-commands code-review feature-dev security-guidance code-simplifier
             claude-md-management superpowers context7 frontend-design playwright design

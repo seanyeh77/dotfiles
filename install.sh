@@ -364,7 +364,8 @@ fi
 #   Claude Code and its plugins, Docker, the terminal setup (macOS) and the Nerd Font.
 # The answers are saved in ~/.config/dotfiles/answers and reused (DOTFILES_ASK=1 asks again).
 # Presets: INSTALL_CLAUDE=1|0, CLAUDE_PLUGINS="a b", INSTALL_DOCKER=1|0, SETUP_TERMINAL=1|0,
-# INSTALL_FONT=1|0 (DOTFILES_FONT=1|0 too), SETUP_SSH=1|0 (tssh, trzsz, tsshd; `ssh` runs tssh).
+# INSTALL_FONT=1|0 (DOTFILES_FONT=1|0 too), SETUP_SSH=1|0 (tssh, trzsz, tsshd; `ssh` runs tssh),
+# CLAUDE_NTFY=1|0 (ntfy push when Claude is done / needs you; NTFY_URL, NTFY_TOPIC, NTFY_TOKEN).
 # Without a terminal, unset ones take the defaults.
 # name|source|description; source is a marketplace (official, knowledge-work) or "skill"
 CLAUDE_WORKFLOW_PLUGINS=(
@@ -436,7 +437,7 @@ case "${DOTFILES_FONT:-}" in 1|0) INSTALL_FONT="${INSTALL_FONT:-$DOTFILES_FONT}"
 ANSWERS="$STATE_DIR/answers"
 SAVED_ANSWERS=0
 if [ "${DOTFILES_ASK:-0}" != 1 ] && [ -f "$ANSWERS" ]; then
-  for k in INSTALL_CLAUDE CLAUDE_PLUGINS INSTALL_DOCKER SETUP_TERMINAL INSTALL_FONT SETUP_SSH; do
+  for k in INSTALL_CLAUDE CLAUDE_PLUGINS INSTALL_DOCKER SETUP_TERMINAL INSTALL_FONT SETUP_SSH CLAUDE_NTFY; do
     v="$(sed -n "s/^$k=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$ANSWERS" | tail -1)"
     if [ -z "$(eval "echo \${$k+set}")" ] && grep -q "^$k=" "$ANSWERS"; then eval "$k=\"\$v\""; SAVED_ANSWERS=1; fi
   done
@@ -447,6 +448,7 @@ OPEN=0 # something that applies here has no answer yet
 [ -n "$TERM_OFFER" ] && [ -z "${SETUP_TERMINAL:-}" ] && OPEN=1
 [ "$FONT_OFFER" = 1 ] && [ -z "${INSTALL_FONT:-}" ] && OPEN=1
 [ -z "${SETUP_SSH:-}" ] && OPEN=1
+[ "${INSTALL_CLAUDE:-1}" != 0 ] && [ -z "${CLAUDE_NTFY:-}" ] && OPEN=1
 
 # The checklist, drawn on the terminal: ↑↓ (or j k) move, Space toggles, a / n all / none,
 # Enter continues, q quits. Rows: id | label | description | kind (main, sub, off)
@@ -527,6 +529,7 @@ if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "
     nm="${e%%|*}"; on=0; case " $sel " in *" $nm "*) on=1 ;; esac
     m_add "plugin:$nm" "$nm" "${e##*|}" sub "$on"
   done
+  m_add ntfy "ntfy notifications" "push to your phone (ntfy app) when Claude is done or needs you" sub "${CLAUDE_NTFY:-0}"
   if [ "$DOCKER_BLOCKED" = 1 ]; then m_add docker "Docker" "needs sudo, which you do not have here" off 0
   elif [ "$DOCKER_TODO" = install ] && [ "$PM" = brew ]; then m_add docker "Docker" "Docker Desktop" main "${INSTALL_DOCKER:-0}"
   elif [ "$DOCKER_TODO" = install ]; then m_add docker "Docker" "Engine + Compose, and you in the docker group (sudo)" main "${INSTALL_DOCKER:-0}"
@@ -542,20 +545,53 @@ if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "
     nm="${e%%|*}"; [ "$(m_value "plugin:$nm")" = 1 ] && CLAUDE_PLUGINS="$CLAUDE_PLUGINS $nm"
   done
   CLAUDE_PLUGINS="${CLAUDE_PLUGINS# }"
+  CLAUDE_NTFY="$(m_value ntfy)"
   if [ -n "$DOCKER_TODO" ] && [ "$DOCKER_BLOCKED" = 0 ]; then INSTALL_DOCKER="$(m_value docker)"; fi
   [ -n "$TERM_OFFER" ] && SETUP_TERMINAL="$(m_value terminal)"
   [ "$FONT_OFFER" = 1 ] && INSTALL_FONT="$(m_value font)"
   SETUP_SSH="$(m_value ssh)"
   SAVED_ANSWERS=0
   mkdir -p "$STATE_DIR"
-  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\nSETUP_SSH=%s\n' \
+  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\nSETUP_SSH=%s\nCLAUDE_NTFY=%s\n' \
     "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "${INSTALL_DOCKER:-0}" "${SETUP_TERMINAL:-1}" "${INSTALL_FONT:-1}" \
-    "${SETUP_SSH:-1}" > "$ANSWERS"
+    "${SETUP_SSH:-1}" "${CLAUDE_NTFY:-0}" > "$ANSWERS"
 fi
 # Defaults for anything still unset (no terminal: CI, cron)
 INSTALL_CLAUDE="${INSTALL_CLAUDE:-0}"; INSTALL_DOCKER="${INSTALL_DOCKER:-0}"
 SETUP_TERMINAL="${SETUP_TERMINAL:-1}"; INSTALL_FONT="${INSTALL_FONT:-1}"; SETUP_SSH="${SETUP_SSH:-1}"
 if [ "$INSTALL_CLAUDE" = 1 ]; then CLAUDE_PLUGINS="${CLAUDE_PLUGINS-$ALL_PLUGINS}"; else CLAUDE_PLUGINS=""; fi
+CLAUDE_NTFY="${CLAUDE_NTFY:-0}"; [ "$INSTALL_CLAUDE" = 1 ] || CLAUDE_NTFY=0
+
+# ntfy: the server, topic and token live only on this machine, in ~/.config/dotfiles/ntfy (mode 600),
+# never in the repo. Asked once; NTFY_URL / NTFY_TOPIC / NTFY_TOKEN preset them (e.g. without a terminal).
+NTFY_CONF="$STATE_DIR/ntfy"; NTFY_NEW=0
+ask_line() { # ask_line PROMPT DEFAULT [hidden]: one line from the terminal, DEFAULT when empty
+  local a=""
+  printf '  %s %s%s%s ' "$1" "$D" "${2:+[$2]}" "$N" >/dev/tty
+  if [ "${3:-}" = hidden ]; then
+    stty -echo </dev/tty 2>/dev/null || true; IFS= read -r a </dev/tty || true
+    stty echo </dev/tty 2>/dev/null || true; printf '\n' >/dev/tty
+  else IFS= read -r a </dev/tty || true; fi
+  printf '%s' "${a:-$2}"
+}
+if [ "$CLAUDE_NTFY" = 1 ] && ! grep -qs '^NTFY_TOPIC=..*' "$NTFY_CONF"; then
+  n_url="${NTFY_URL:-}"; n_topic="${NTFY_TOPIC:-}"; n_token="${NTFY_TOKEN:-}"
+  if [ -z "$n_topic" ] && [ "$HAS_TTY" = 1 ]; then
+    printf '\n  %sntfy notifications%s %s(saved only on this machine, in %s)%s\n' "$B" "$N" "$D" "${NTFY_CONF/#$HOME/~}" "$N" >/dev/tty
+    n_url="$(ask_line "Server:" "${n_url:-https://ntfy.sh}")"
+    # Anyone who knows a topic on a public server can read it: suggest one nobody can guess
+    n_topic="$(ask_line "Topic (subscribe to it in the ntfy app):" "claude-$(od -An -tx1 -N6 /dev/urandom | tr -d ' \n')")"
+    n_token="$(ask_line "Access token (Enter if none):" "" hidden)"
+  fi
+  if [ -n "$n_topic" ]; then
+    mkdir -p "$STATE_DIR"
+    ( umask 077; printf 'NTFY_URL=%s\nNTFY_TOPIC=%s\nNTFY_TOKEN=%s\n' "${n_url:-https://ntfy.sh}" "$n_topic" "$n_token" > "$NTFY_CONF" )
+    NTFY_NEW=1
+  else
+    warn "ntfy notifications: no topic (run again in a terminal, or set NTFY_TOPIC), so they stay off"
+    CLAUDE_NTFY=0
+  fi
+fi
 CLAUDE_PLUGINS="$(echo ${CLAUDE_PLUGINS:-})" # normalize spaces
 case "$CLAUDE_PLUGINS" in none|NONE) CLAUDE_PLUGINS="" ;; esac
 if [ "$INSTALL_DOCKER" = 1 ] && [ "$DOCKER_BLOCKED" = 1 ]; then
@@ -573,6 +609,7 @@ if [ -n "$DOCKER_TODO" ]; then CH="$CH $S_DOT Docker"; fi
 if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then CH="$CH $S_DOT terminal setup"; fi
 [ "$want_font" = 1 ] && CH="$CH $S_DOT Nerd Font"
 [ "$SETUP_SSH" = 1 ] && CH="$CH $S_DOT SSH tools"
+[ "$CLAUDE_NTFY" = 1 ] && CH="$CH $S_DOT ntfy"
 if [ "$SAVED_ANSWERS" = 1 ]; then CH="$CH  ${D}(saved; DOTFILES_ASK=1 to change)${N}"; fi
 log "Choices: $CH"
 
@@ -1102,6 +1139,17 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then
     grep -qs "\"$k\"" "$CLAUDE_SETTINGS" "$HOME/.claude.json" || NEED_CLAUDE_PUSH=1
   done
   [ "$NEED_CLAUDE_PUSH" = 1 ] && user_plan "Claude settings" "phone notifications on: when Claude is done and when it needs you (with Remote Control)"
+fi
+# ntfy hooks in ~/.claude/settings.json: added when chosen, removed when not
+NTFY_HOOK="$STATE_DIR/claude-ntfy.js"; NEED_NTFY_HOOK=0
+if [ "$CLAUDE_NTFY" = 1 ] && ! grep -qs 'claude-ntfy.js' "$CLAUDE_SETTINGS"; then
+  NEED_NTFY_HOOK=1
+  user_plan "ntfy" "push to topic $(sed -n 's/^NTFY_TOPIC=//p' "$NTFY_CONF") when Claude is done (turns over 30 s) or needs you"
+elif [ "$CLAUDE_NTFY" = 0 ] && grep -qs 'claude-ntfy.js' "$CLAUDE_SETTINGS"; then
+  NEED_NTFY_HOOK=1
+  user_plan "ntfy" "notifications off: remove the hooks from ~/.claude/settings.json"
+fi
+if [ "$INSTALL_CLAUDE" = 1 ]; then
   # Second layer: a global commit-msg hook strips those lines from any commit, and runs each
   # repository's own hooks too. Only when no other global hooks path is set.
   v="$(gitg config --global core.hooksPath 2>/dev/null || true)"
@@ -1466,6 +1514,7 @@ install_tree "$SRC/nvim" "$CONFIG_HOME/nvim" nvim lazyvim.json
 [ -f "$CONFIG_HOME/nvim/init.lua" ] || die "could not copy the nvim config to $CONFIG_HOME/nvim"
 install_file "$SRC/tmux/tmux.conf.local" "$HOME/.tmux.conf.local" tmux.conf.local
 install_file "$SRC/shell/env.sh" "$STATE_DIR/env.sh" env.sh
+[ "$CLAUDE_NTFY" = 1 ] && install_file "$SRC/claude/ntfy-hook.js" "$NTFY_HOOK" claude-ntfy.js
 # git hooks: hook.sh plus one relative link per hook name (cp -R keeps them as links)
 rm -rf "${STATE_DIR:?}/git.new"; cp -R "$SRC/git" "$STATE_DIR/git.new"
 rm -rf "${STATE_DIR:?}/git"; mv "$STATE_DIR/git.new" "$STATE_DIR/git"
@@ -1863,9 +1912,12 @@ job_claude_plugins() {
   #   attribution: Claude is not added as a co-author of commits and PRs ("" hides the text)
   #   agentPushNotifEnabled / inputNeededNotifEnabled: push to the Claude phone app (Remote Control)
   #   env.USE_BUILTIN_RIPGREP=0 on musl (Alpine), where the bundled ripgrep cannot run
-  if [ "$NEED_CLAUDE_ATTR" = 1 ] || [ "$NEED_CLAUDE_PUSH" = 1 ] || [ "$PM" = apk ]; then
+  #   hooks.Stop / hooks.Notification: the ntfy hook (claude-ntfy.js), added or removed
+  if [ "$NEED_CLAUDE_ATTR" = 1 ] || [ "$NEED_CLAUDE_PUSH" = 1 ] || [ "$NEED_NTFY_HOOK" = 1 ] || [ "$PM" = apk ]; then
     mkdir -p "$HOME/.claude"
-    if CLAUDE_SETTINGS="$CLAUDE_SETTINGS" PUSH="$NEED_CLAUDE_PUSH" MUSL="$([ "$PM" = apk ] && echo 1 || echo 0)" node -e '
+    NTFY_CMD=""; [ "$NEED_NTFY_HOOK" = 1 ] && [ "$CLAUDE_NTFY" = 1 ] && NTFY_CMD="\"$(command -v node)\" \"$NTFY_HOOK\""
+    if CLAUDE_SETTINGS="$CLAUDE_SETTINGS" PUSH="$NEED_CLAUDE_PUSH" NTFY="$([ "$NEED_NTFY_HOOK" = 1 ] && echo "$CLAUDE_NTFY")" \
+       NTFY_CMD="$NTFY_CMD" MUSL="$([ "$PM" = apk ] && echo 1 || echo 0)" node -e '
       const fs = require("fs"), f = process.env.CLAUDE_SETTINGS;
       let s = {};
       if (fs.existsSync(f)) s = JSON.parse(fs.readFileSync(f, "utf8") || "{}");
@@ -1880,14 +1932,36 @@ job_claude_plugins() {
       if (process.env.PUSH === "1") {
         for (const k of ["agentPushNotifEnabled", "inputNeededNotifEnabled"]) if (s[k] === undefined) s[k] = true;
       }
+      // ntfy: drop our hook entries, then add them back when on (other hooks are kept)
+      if (process.env.NTFY === "1" || process.env.NTFY === "0") {
+        s.hooks = s.hooks || {};
+        for (const ev of ["Stop", "Notification"]) {
+          let groups = (s.hooks[ev] || []).map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !String(h.command || "").includes("claude-ntfy.js")) }))
+            .filter((g) => g.hooks.length > 0);
+          if (process.env.NTFY === "1") groups.push({ hooks: [{ type: "command", command: process.env.NTFY_CMD, timeout: 10 }] });
+          if (groups.length) s.hooks[ev] = groups; else delete s.hooks[ev];
+        }
+        if (!Object.keys(s.hooks).length) delete s.hooks;
+      }
       if (process.env.MUSL === "1") { s.env = s.env || {}; if (s.env.USE_BUILTIN_RIPGREP === undefined) s.env.USE_BUILTIN_RIPGREP = "0"; }
       fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n");
     '; then
       [ "$NEED_CLAUDE_ATTR" = 1 ] && did "Claude settings: no co-author or session link in commits and PRs"
       [ "$NEED_CLAUDE_PUSH" = 1 ] && did "Claude settings: phone notifications on (they arrive while Remote Control is on: /remote-control)"
+      if [ "$NEED_NTFY_HOOK" = 1 ] && [ "$CLAUDE_NTFY" = 1 ]; then did "ntfy: Claude pushes when it is done or needs you (new sessions)"
+      elif [ "$NEED_NTFY_HOOK" = 1 ]; then did "ntfy: hooks removed"; fi
     else
       failed "Claude settings (could not update ~/.claude/settings.json; is it valid JSON?)"
     fi
+  fi
+  if [ "${NTFY_NEW:-0}" = 1 ] && [ "$CLAUDE_NTFY" = 1 ]; then
+    # One message now, so you can check that it arrives
+    # shellcheck disable=SC1090
+    ( . "$NTFY_CONF"
+      curl -fsS -m 15 -H "Content-Type: application/json" ${NTFY_TOKEN:+-H "Authorization: Bearer $NTFY_TOKEN"} \
+        -d "{\"topic\":\"$NTFY_TOPIC\",\"title\":\"dotfiles\",\"message\":\"ntfy works on $(hostname | cut -d. -f1)\",\"tags\":[\"tada\"]}" \
+        "${NTFY_URL%/}" >/dev/null ) && note "ntfy: test message sent to $(sed -n 's/^NTFY_TOPIC=//p' "$NTFY_CONF")" \
+      || failed "ntfy test message (check NTFY_URL / NTFY_TOPIC / NTFY_TOKEN in ${NTFY_CONF/#$HOME/~})"
   fi
   if [ "$NEED_GIT_HOOK" = 1 ]; then
     if gitg config --global core.hooksPath "$GIT_HOOKS"; then did "git commit-msg hook (core.hooksPath $GIT_HOOKS)"

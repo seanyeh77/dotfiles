@@ -41,6 +41,7 @@ Pick it and its plugins in the checklist (all on by default).
 - Frontend: frontend-design, playwright, design, vercel-react-best-practices
 - Language-server plugins for the languages nvim supports
 - Phone notifications are on: the Claude app on your phone gets a push when Claude is done and when it waits for you (a permission or a question). They arrive while the session has Remote Control on (`/remote-control`); turn either off in `/config` (*Push when Claude decides*, *Push when actions required*), later runs keep your choice.
+- **ntfy** (optional, in the checklist): Claude pushes to an [ntfy](https://ntfy.sh) topic when a turn that took over 30 s is done (with its last message) and when it needs you (a permission or a question). Works without Remote Control, from any machine. The first run asks for the server (default `https://ntfy.sh`, or your own), a topic (a random one is suggested: on a public server the topic is the password) and an optional token, and sends a test message. They are kept only on that machine, in `~/.config/dotfiles/ntfy`; edit it to change them, or set `NTFY_MIN_SECONDS` there. Subscribe to the topic in the ntfy app.
 - Claude is never added as a co-author: Claude Code is set not to add `Co-Authored-By` or session links, and a global git `commit-msg` hook removes those lines from any commit (each repository's own hooks still run).
 - At the end the installer lists the MCP servers that still need a sign-in (run `/mcp` in Claude).
 
@@ -51,7 +52,8 @@ Set them before `bash`, e.g. `curl -fsSL seanyeh77.github.io/dotfiles | DOTFILES
 | Variable | Effect |
 | --- | --- |
 | `DOTFILES_ASK=1` | Show the checklist again |
-| `INSTALL_CLAUDE`, `CLAUDE_PLUGINS="a b"`, `INSTALL_DOCKER`, `SETUP_TERMINAL`, `INSTALL_FONT`, `SETUP_SSH` | Preset the choices (`1` or `0`) |
+| `INSTALL_CLAUDE`, `CLAUDE_PLUGINS="a b"`, `INSTALL_DOCKER`, `SETUP_TERMINAL`, `INSTALL_FONT`, `SETUP_SSH`, `CLAUDE_NTFY` | Preset the choices (`1` or `0`) |
+| `NTFY_URL`, `NTFY_TOPIC`, `NTFY_TOKEN` | ntfy settings without being asked (e.g. `NTFY_TOPIC=... CLAUDE_NTFY=1`) |
 | `ASSUME_YES=1` | Do not ask before installing |
 | `DOTFILES_PLAIN=1` | No spinner: every command's output on screen |
 | `DOTFILES_SERIAL=1` / `0` | One step at a time / always in parallel (default: one at a time when under 2 GB of memory is free) |

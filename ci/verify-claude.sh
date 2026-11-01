@@ -43,6 +43,19 @@ check "settings: no co-author attribution" $?
 node -e 'const s = require(process.env.HOME + "/.claude/settings.json");
   process.exit(s.agentPushNotifEnabled === true && s.inputNeededNotifEnabled === true ? 0 : 1)'
 check "settings: phone notifications on" $?
+# ntfy: the hook is in settings.json for Stop and Notification, and builds the message it would send
+node -e 'const s = require(process.env.HOME + "/.claude/settings.json");
+  const has = (ev) => (s.hooks?.[ev] || []).some((g) => g.hooks.some((h) => h.command.includes("claude-ntfy.js")));
+  process.exit(has("Stop") && has("Notification") ? 0 : 1)'
+check "settings: ntfy hooks" $?
+t="$(mktemp -d)"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/args"\n' "$t" > "$t/curl"; chmod +x "$t/curl"
+echo '{"hook_event_name":"Notification","message":"Claude needs your permission to use Bash","cwd":"/tmp"}' \
+  | NTFY_CURL="$t/curl" node "${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles/claude-ntfy.js"
+sleep 1
+grep -q '"title":"Claude needs you' "$t/args" 2>/dev/null && grep -q "https://ntfy.sh" "$t/args"
+check "ntfy hook builds the message" $?
+rm -rf "$t"
 # The global commit-msg hook removes Claude co-author lines and keeps other co-authors
 t="$(mktemp -d)"
 git -C "$t" init -q && git -C "$t" -c user.name=ci -c user.email=ci@example.com commit -q --allow-empty \
