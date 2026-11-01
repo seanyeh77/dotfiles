@@ -1144,7 +1144,7 @@ fi
 NTFY_HOOK="$STATE_DIR/claude-ntfy.js"; NEED_NTFY_HOOK=0
 if [ "$CLAUDE_NTFY" = 1 ] && ! grep -qs 'claude-ntfy.js' "$CLAUDE_SETTINGS"; then
   NEED_NTFY_HOOK=1
-  user_plan "ntfy" "push to topic $(sed -n 's/^NTFY_TOPIC=//p' "$NTFY_CONF") when Claude is done (turns over 30 s) or needs you"
+  user_plan "ntfy" "push to topic $(sed -n 's/^NTFY_TOPIC=//p' "$NTFY_CONF") when Claude is done or needs you"
 elif [ "$CLAUDE_NTFY" = 0 ] && grep -qs 'claude-ntfy.js' "$CLAUDE_SETTINGS"; then
   NEED_NTFY_HOOK=1
   user_plan "ntfy" "notifications off: remove the hooks from ~/.claude/settings.json"
