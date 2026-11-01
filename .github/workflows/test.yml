@@ -39,7 +39,7 @@ jobs:
           NTFY_TOPIC: ${{ matrix.claude && format('dotfiles-ci-{0}', github.run_id) || '' }}
           CLAUDE_PLUGINS: >-
             commit-commands code-review feature-dev security-guidance code-simplifier
-            claude-md-management superpowers context7 frontend-design playwright design
+            claude-md-management superpowers context7 frontend-design playwright modern-web-guidance design
             vercel-react-best-practices
       - name: verify
         run: nvim --headless -c "luafile ci/verify.lua" 2>&1 | tee "$RUNNER_TEMP/verify.log"
@@ -86,7 +86,7 @@ jobs:
           feature-dev@claude-plugins-official security-guidance@claude-plugins-official
           code-simplifier@claude-plugins-official claude-md-management@claude-plugins-official
           superpowers@claude-plugins-official context7@claude-plugins-official
-          frontend-design@claude-plugins-official playwright@claude-plugins-official
+          frontend-design@claude-plugins-official playwright@claude-plugins-official modern-web-guidance@claude-plugins-official
           design@knowledge-work-plugins skill:vercel-react-best-practices
           2>&1 | tee "$RUNNER_TEMP/verify-claude.log"
         shell: bash -o pipefail {0}

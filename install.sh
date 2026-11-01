@@ -379,11 +379,15 @@ CLAUDE_WORKFLOW_PLUGINS=(
   "context7|official|up-to-date library docs for Claude (third-party)"
   "frontend-design|official|distinctive, production-grade web UI design"
   "playwright|official|let Claude open a browser and see the page (third-party)"
+  "modern-web-guidance|official|current web platform best practices (Google Chrome)"
   "design|knowledge-work|design critique, accessibility and UX writing"
   "vercel-react-best-practices|skill|React / Next.js performance rules (Vercel)"
 )
 ALL_PLUGINS=""; for e in "${CLAUDE_WORKFLOW_PLUGINS[@]}"; do ALL_PLUGINS="$ALL_PLUGINS ${e%%|*}"; done
 ALL_PLUGINS="${ALL_PLUGINS# }"
+# Plugins added to the list after a machine saved its choices are offered there (preselected) on the
+# next run. Answers saved before CLAUDE_PLUGINS_KNOWN existed knew the list without these:
+PLUGINS_ADDED_LATER="modern-web-guidance"
 
 # Docker: a system install, so only offered with root, sudo or Homebrew. On Linux you are also
 # added to the docker group, so docker runs without sudo (that group is as powerful as root).
@@ -437,12 +441,23 @@ case "${DOTFILES_FONT:-}" in 1|0) INSTALL_FONT="${INSTALL_FONT:-$DOTFILES_FONT}"
 ANSWERS="$STATE_DIR/answers"
 SAVED_ANSWERS=0
 if [ "${DOTFILES_ASK:-0}" != 1 ] && [ -f "$ANSWERS" ]; then
-  for k in INSTALL_CLAUDE CLAUDE_PLUGINS INSTALL_DOCKER SETUP_TERMINAL INSTALL_FONT SETUP_SSH CLAUDE_NTFY; do
+  [ -z "${CLAUDE_PLUGINS+set}" ] && grep -q '^CLAUDE_PLUGINS=' "$ANSWERS" && PLUGINS_SAVED=1
+  for k in INSTALL_CLAUDE CLAUDE_PLUGINS CLAUDE_PLUGINS_KNOWN INSTALL_DOCKER SETUP_TERMINAL INSTALL_FONT SETUP_SSH CLAUDE_NTFY; do
     v="$(sed -n "s/^$k=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$ANSWERS" | tail -1)"
     if [ -z "$(eval "echo \${$k+set}")" ] && grep -q "^$k=" "$ANSWERS"; then eval "$k=\"\$v\""; SAVED_ANSWERS=1; fi
   done
 fi
 OPEN=0 # something that applies here has no answer yet
+# New plugins since the choices were saved: preselect them and show the checklist
+if [ "${PLUGINS_SAVED:-0}" = 1 ] && [ "${INSTALL_CLAUDE:-1}" = 1 ] && [ -n "${CLAUDE_PLUGINS:-}" ]; then
+  known="${CLAUDE_PLUGINS_KNOWN-}"
+  if [ -z "$known" ]; then
+    for p in $ALL_PLUGINS; do case " $PLUGINS_ADDED_LATER " in *" $p "*) ;; *) known="$known $p" ;; esac; done
+  fi
+  for p in $ALL_PLUGINS; do
+    case " $known " in *" $p "*) ;; *) CLAUDE_PLUGINS="${CLAUDE_PLUGINS:+$CLAUDE_PLUGINS }$p"; NEW_PLUGINS="${NEW_PLUGINS:+$NEW_PLUGINS }$p"; OPEN=1 ;; esac
+  done
+fi
 [ -z "${INSTALL_CLAUDE:-}" ] && OPEN=1
 [ -n "$DOCKER_TODO" ] && [ "$DOCKER_BLOCKED" = 0 ] && [ -z "${INSTALL_DOCKER:-}" ] && OPEN=1
 [ -n "$TERM_OFFER" ] && [ -z "${SETUP_TERMINAL:-}" ] && OPEN=1
@@ -552,8 +567,8 @@ if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "
   SETUP_SSH="$(m_value ssh)"
   SAVED_ANSWERS=0
   mkdir -p "$STATE_DIR"
-  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\nSETUP_SSH=%s\nCLAUDE_NTFY=%s\n' \
-    "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "${INSTALL_DOCKER:-0}" "${SETUP_TERMINAL:-1}" "${INSTALL_FONT:-1}" \
+  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nCLAUDE_PLUGINS_KNOWN="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\nSETUP_SSH=%s\nCLAUDE_NTFY=%s\n' \
+    "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "$ALL_PLUGINS" "${INSTALL_DOCKER:-0}" "${SETUP_TERMINAL:-1}" "${INSTALL_FONT:-1}" \
     "${SETUP_SSH:-1}" "${CLAUDE_NTFY:-0}" > "$ANSWERS"
 fi
 # Defaults for anything still unset (no terminal: CI, cron)
@@ -612,6 +627,7 @@ if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then CH="$CH $S_DOT terminal 
 [ "$CLAUDE_NTFY" = 1 ] && CH="$CH $S_DOT ntfy"
 if [ "$SAVED_ANSWERS" = 1 ]; then CH="$CH  ${D}(saved; DOTFILES_ASK=1 to change)${N}"; fi
 log "Choices: $CH"
+[ -n "${NEW_PLUGINS:-}" ] && log "New in the Claude plugin list: $NEW_PLUGINS"
 
 # Bound slow steps so a network problem cannot hang forever. macOS has no `timeout`: use gtimeout
 # (coreutils) or perl's alarm, which kills the command when the time is up.

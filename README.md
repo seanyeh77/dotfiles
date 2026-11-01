@@ -38,7 +38,8 @@ No copy of this repo stays behind: the files are copied into place (`~/.config/n
 Pick it and its plugins in the checklist (all on by default).
 
 - Workflow: commit-commands, code-review, feature-dev, security-guidance, code-simplifier, claude-md-management, superpowers, context7
-- Frontend: frontend-design, playwright, design, vercel-react-best-practices
+- Frontend: frontend-design, playwright, design, modern-web-guidance (Google Chrome's web platform guidance), vercel-react-best-practices
+- A plugin added to this list later is offered, preselected, the next time you run the installer
 - Language-server plugins for the languages nvim supports
 - Phone notifications are on: the Claude app on your phone gets a push when Claude is done and when it waits for you (a permission or a question). They arrive while the session has Remote Control on (`/remote-control`); turn either off in `/config` (*Push when Claude decides*, *Push when actions required*), later runs keep your choice.
 - **ntfy** (optional, in the checklist): Claude pushes to an [ntfy](https://ntfy.sh) topic every time it is done (with its last message) and when it needs you (a permission or a question). Works without Remote Control, from any machine. The first run asks for the server (default `https://ntfy.sh`, or your own), a topic (a random one is suggested: on a public server the topic is the password) and an optional token, and sends a test message. They are kept only on that machine, in `~/.config/dotfiles/ntfy`; edit it to change them. Subscribe to the topic in the ntfy app.
