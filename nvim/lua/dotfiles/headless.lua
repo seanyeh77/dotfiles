@@ -48,7 +48,27 @@ function M.collect()
   lazy.load({ plugins = { "mason.nvim", "nvim-lspconfig", "nvim-treesitter" } })
   mlsp.setup = setup
 
-  local map = require("mason-lspconfig.mappings").get_mason_map().lspconfig_to_package
+  -- lspconfig server name -> Mason package name. Seen once in CI: the mappings module came back as
+  -- `true` instead of a table, and the whole install stopped. Try the public API too, and fall back
+  -- to the server name (the same as the package name for most servers).
+  local map = {}
+  for _, get in ipairs({
+    function()
+      return require("mason-lspconfig.mappings").get_mason_map().lspconfig_to_package
+    end,
+    function()
+      return mlsp.get_mappings().lspconfig_to_package
+    end,
+  }) do
+    local ok, m = pcall(get)
+    if ok and type(m) == "table" and next(m) then
+      map = m
+      break
+    end
+  end
+  if not next(map) and #servers > 0 then
+    out("!! Mason's server -> package names are unavailable; using the server names")
+  end
   local seen, mason = {}, {}
   local function add(name)
     if name and not seen[name] then
