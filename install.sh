@@ -662,14 +662,14 @@ export GIT_TERMINAL_PROMPT=0
 # Python is not here: each user gets their own from uv (below).
 case "$PM" in
   brew)    OS_REQ=(git tmux ripgrep:rg fd neovim:nvim node)
-           OS_OPT=(tree-sitter-cli:tree-sitter lazygit imagemagick:magick ghostscript:gs)
+           OS_OPT=(tree-sitter-cli:tree-sitter lazygit gh imagemagick:magick ghostscript:gs)
            [ "$SETUP_SSH" = 1 ] && OS_OPT+=(trzsz-go:trzsz trzsz-ssh:tssh tsshd) ;;
   apt-get) OS_REQ=(git curl unzip tar gzip xz-utils:xz findutils:find tmux ripgrep:rg build-essential)
            if [ "$IS_TERMUX" = 1 ]; then
              # Termux: Neovim, Node.js, tree-sitter, uv and Python come from its packages too
              OS_REQ=(git curl unzip tar gzip xz-utils:xz findutils:find tmux ripgrep:rg build-essential perl
                      neovim:nvim nodejs-lts:node tree-sitter python:python3 uv)
-             OS_OPT=(fd lua-language-server lazygit wget)
+             OS_OPT=(fd lua-language-server lazygit gh wget)
            else
              OS_OPT=(fd-find:fdfind clangd xclip perl wget imagemagick ghostscript:gs)
            fi ;;
@@ -680,7 +680,7 @@ case "$PM" in
   zypper)  OS_REQ=(git curl unzip tar gzip xz findutils:find tmux ripgrep:rg gcc gcc-c++:g++ make)
            OS_OPT=(fd clang-tools:clangd xclip perl wget ImageMagick:magick ghostscript:gs) ;;
   apk)     OS_REQ=(bash git curl unzip tar gzip xz findutils:find tmux perl ripgrep:rg build-base neovim:nvim nodejs:node npm)
-           OS_OPT=(fd clang-extra-tools:clangd lua-language-server tree-sitter-cli:tree-sitter lazygit xclip wget imagemagick:magick ghostscript:gs) ;;
+           OS_OPT=(fd clang-extra-tools:clangd lua-language-server tree-sitter-cli:tree-sitter lazygit github-cli:gh xclip wget imagemagick:magick ghostscript:gs) ;;
 esac
 # Claude Code on musl needs libgcc / libstdc++ (and uses the system ripgrep, already required)
 [ "$PM" = apk ] && [ "$INSTALL_CLAUDE" = 1 ] && OS_REQ+=(libgcc libstdc++)
@@ -884,6 +884,7 @@ if [ "$USE_PM_TOOLS" = 0 ]; then
   lookup ts "tree-sitter CLI" gh_latest tree-sitter/tree-sitter
   lookup uv "uv" gh_latest astral-sh/uv
   lookup lazygit "lazygit" gh_latest jesseduffield/lazygit
+  lookup gh "GitHub CLI" gh_latest cli/cli
   if [ -z "${PYTHON_VERSION:-}" ] && has uv; then lookup python "Python" lk_python; fi
 fi
 lk_dotfiles() { # the commit this install would use
@@ -990,6 +991,15 @@ if [ "$USE_PM_TOOLS" = 0 ]; then
   [ "$LG_CUR" = v ] && LG_CUR=""
   LG_LATEST="$(lookup_result lazygit)"
   outdated "$LG_CUR" "$LG_LATEST" && NEED_LG=1
+fi
+# GitHub CLI (gh: pull requests, issues, Actions from the terminal; Claude Code uses it too): a static
+# binary in ~/.local/bin on Linux, like lazygit; macOS, Alpine and Termux take it from their package manager
+GH_CUR=""; GH_LATEST=""; NEED_GH=0
+if [ "$USE_PM_TOOLS" = 0 ]; then
+  [ -x "$LOCAL_BIN/gh" ] && GH_CUR="v$("$LOCAL_BIN/gh" --version 2>/dev/null | sed -n '1s/^gh version \([^ ]*\).*/\1/p' || true)"
+  [ "$GH_CUR" = v ] && GH_CUR=""
+  GH_LATEST="$(lookup_result gh)"
+  outdated "$GH_CUR" "$GH_LATEST" && NEED_GH=1
 fi
 PY_CUR=""; [ -x "$LOCAL_BIN/python3" ] && PY_CUR="$("$LOCAL_BIN/python3" --version 2>/dev/null | awk '{print $2}' || true)"
 PY_LATEST=""
@@ -1128,6 +1138,7 @@ fi
 [ "$NEED_TS" = 1 ]       && user_plan "tree-sitter CLI" "$(change "$TS_CUR" "$TS_LATEST" "~/.local/opt/tree-sitter-cli")"
 [ "$NEED_UV" = 1 ]       && user_plan "uv" "$(change "$UV_CUR" "$UV_LATEST" "~/.local/bin")"
 [ "$NEED_LG" = 1 ]       && user_plan "lazygit" "$(change "$LG_CUR" "$LG_LATEST" "~/.local/bin")"
+[ "$NEED_GH" = 1 ]       && user_plan "GitHub CLI (gh)" "$(change "$GH_CUR" "$GH_LATEST" "~/.local/bin")"
 for i in "${!TZ_TOOLS[@]}"; do
   [ "${TZ_NEED[$i]}" = 1 ] || continue
   case "${TZ_TOOLS[$i]%%|*}" in
@@ -1708,6 +1719,23 @@ job_lazygit() {
   fi
 
 }
+job_gh() {
+  # ---------- GitHub CLI (per user, Linux) ----------
+  if [ -z "$GH_LATEST" ]; then GH_LATEST="$(gh_latest cli/cli)"; fi
+  if [ -z "$GH_LATEST" ]; then
+    step "Installing the GitHub CLI"
+    failed "GitHub CLI (could not look up the latest release)"
+    return 0
+  fi
+  step "Installing the GitHub CLI $GH_LATEST in ~/.local/bin"
+  local v="${GH_LATEST#v}" d="gh_${GH_LATEST#v}_linux_$ARCH"
+  if fetch_once "https://github.com/cli/cli/releases/download/$GH_LATEST/$d.tar.gz" "$TMP/gh.tgz" \
+     && tar -C "$TMP" -xzf "$TMP/gh.tgz" "$d/bin/gh" && mv -f "$TMP/$d/bin/gh" "$LOCAL_BIN/gh"; then
+    if [ -n "$GH_CUR" ]; then did "GitHub CLI $GH_LATEST (was $GH_CUR)"; else did "GitHub CLI $GH_LATEST (sign in: gh auth login)"; fi
+  else
+    failed "GitHub CLI ($v)"
+  fi
+}
 job_uv() {
   # ---------- uv and Python (per user) ----------
   # uv installs into ~/.local/bin; `uv python install --default` adds python3 there too, so
@@ -2020,6 +2048,7 @@ job_claude_plugins() {
 [ "$NEED_NODE" = 1 ] && job node "Node.js" job_node
 { [ "$NEED_UV" = 1 ] || [ "$NEED_PY" = 1 ]; } && job uv "uv and Python" job_uv
 [ "$NEED_LG" = 1 ] && job lazygit "lazygit" job_lazygit
+[ "$NEED_GH" = 1 ] && job gh "GitHub CLI" job_gh
 SSH_TODO=0
 for i in "${!TZ_TOOLS[@]}"; do [ "${TZ_NEED[$i]}" = 1 ] && SSH_TODO=1; done
 [ "$NEED_SSHCFG" = 1 ] && SSH_TODO=1

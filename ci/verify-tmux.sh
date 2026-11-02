@@ -26,5 +26,8 @@ for c in trz tsz trzsz tssh tsshd; do
   if command -v "$c" >/dev/null 2>&1; then r=found; else r=missing; fi
   check "$c on PATH" "$r" "found"
 done
+# GitHub CLI
+if command -v gh >/dev/null 2>&1 && gh --version >/dev/null 2>&1; then r=found; else r=missing; fi
+check "gh on PATH" "$r" "found"
 echo "========== tmux: $failed failed =========="
 exit "$failed"

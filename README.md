@@ -12,7 +12,7 @@ curl -fsSL seanyeh77.github.io/dotfiles | bash
 
 1. **Choose**: a checklist of the optional parts (Claude Code and its plugins, Docker, terminal setup, Nerd Font, SSH tools). `↑↓` move, `Space` toggles, `Enter` continues. Your choices are remembered.
 2. **Plan**: what will be installed or updated, with versions, split into system changes (sudo) and your own `~`. One key press to confirm.
-3. **Install**: one line per step with a spinner; independent downloads (Neovim, Node.js, uv and Python, lazygit, SSH tools, fonts, Claude Code) run in parallel, as do the LSP servers (16 at a time), the treesitter parsers and Claude's plugins; on macOS, `brew update` runs while you read the plan. The commands' output goes to `~/.local/state/dotfiles/install.log`.
+3. **Install**: one line per step with a spinner; independent downloads (Neovim, Node.js, uv and Python, lazygit, GitHub CLI, SSH tools, fonts, Claude Code) run in parallel, as do the LSP servers (16 at a time), the treesitter parsers and Claude's plugins; on macOS, `brew update` runs while you read the plan. The commands' output goes to `~/.local/state/dotfiles/install.log`.
 4. **Summary**: what changed, what failed and why, and the next steps.
 
 Run it again to update. Without a terminal (CI, `> file`) it prints plain lines with all the output instead.
@@ -21,7 +21,7 @@ No copy of this repo stays behind: the files are copied into place (`~/.config/n
 
 - **System** (sudo, every user): only missing OS packages such as git, tmux, compilers and ripgrep; installed ones are never upgraded. Without sudo rights this step is skipped.
 - **Docker** (optional, off by default): Docker Desktop on macOS, Docker Engine with Compose on Linux, and you are added to the `docker` group so it runs without sudo (log in again first). Only offered when you have sudo; if Docker is already there, only the group is offered.
-- **Only you** (`~`, no sudo): Neovim, Node.js LTS, tree-sitter, [uv](https://docs.astral.sh/uv/), Python, lazygit, nvim plugins, LSP servers and Claude Code, kept at the latest release.
+- **Only you** (`~`, no sudo): Neovim, Node.js LTS, tree-sitter, [uv](https://docs.astral.sh/uv/), Python, lazygit, the [GitHub CLI](https://cli.github.com) (`gh`; sign in once with `gh auth login`), nvim plugins, LSP servers and Claude Code, kept at the latest release.
 - **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine, WSL and Termux, on amd64 or arm64.
 
 ## Terminal
