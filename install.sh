@@ -439,6 +439,8 @@ case "${DOTFILES_FONT:-}" in 1|0) INSTALL_FONT="${INSTALL_FONT:-$DOTFILES_FONT}"
 
 # Saved answers fill in what is not preset; anything still open is asked
 ANSWERS="$STATE_DIR/answers"
+# ntfy was off by default until answers version 2: a 0 saved before that was not a choice, ask again
+ntfy_preset="${CLAUDE_NTFY+set}"
 SAVED_ANSWERS=0
 if [ "${DOTFILES_ASK:-0}" != 1 ] && [ -f "$ANSWERS" ]; then
   [ -z "${CLAUDE_PLUGINS+set}" ] && grep -q '^CLAUDE_PLUGINS=' "$ANSWERS" && PLUGINS_SAVED=1
@@ -463,6 +465,9 @@ fi
 [ -n "$TERM_OFFER" ] && [ -z "${SETUP_TERMINAL:-}" ] && OPEN=1
 [ "$FONT_OFFER" = 1 ] && [ -z "${INSTALL_FONT:-}" ] && OPEN=1
 [ -z "${SETUP_SSH:-}" ] && OPEN=1
+if [ -z "$ntfy_preset" ] && [ "${CLAUDE_NTFY:-}" = 0 ] && ! grep -qs '^ANSWERS_VERSION=[2-9]' "$ANSWERS"; then
+  unset CLAUDE_NTFY
+fi
 [ "${INSTALL_CLAUDE:-1}" != 0 ] && [ -z "${CLAUDE_NTFY:-}" ] && OPEN=1
 
 # The checklist, drawn on the terminal: ↑↓ (or j k) move, Space toggles, a / n all / none,
@@ -544,7 +549,7 @@ if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "
     nm="${e%%|*}"; on=0; case " $sel " in *" $nm "*) on=1 ;; esac
     m_add "plugin:$nm" "$nm" "${e##*|}" sub "$on"
   done
-  m_add ntfy "ntfy notifications" "push to your phone (ntfy app) when Claude is done or needs you" sub "${CLAUDE_NTFY:-0}"
+  m_add ntfy "ntfy notifications" "push to your phone (ntfy app) when Claude is done or needs you" sub "${CLAUDE_NTFY:-1}"
   if [ "$DOCKER_BLOCKED" = 1 ]; then m_add docker "Docker" "needs sudo, which you do not have here" off 0
   elif [ "$DOCKER_TODO" = install ] && [ "$PM" = brew ]; then m_add docker "Docker" "Docker Desktop" main "${INSTALL_DOCKER:-0}"
   elif [ "$DOCKER_TODO" = install ]; then m_add docker "Docker" "Engine + Compose, and you in the docker group (sudo)" main "${INSTALL_DOCKER:-0}"
@@ -567,15 +572,20 @@ if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "
   SETUP_SSH="$(m_value ssh)"
   SAVED_ANSWERS=0
   mkdir -p "$STATE_DIR"
-  printf 'INSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nCLAUDE_PLUGINS_KNOWN="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\nSETUP_SSH=%s\nCLAUDE_NTFY=%s\n' \
+  printf 'ANSWERS_VERSION=2\nINSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nCLAUDE_PLUGINS_KNOWN="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\nSETUP_SSH=%s\nCLAUDE_NTFY=%s\n' \
     "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "$ALL_PLUGINS" "${INSTALL_DOCKER:-0}" "${SETUP_TERMINAL:-1}" "${INSTALL_FONT:-1}" \
-    "${SETUP_SSH:-1}" "${CLAUDE_NTFY:-0}" > "$ANSWERS"
+    "${SETUP_SSH:-1}" "${CLAUDE_NTFY:-1}" > "$ANSWERS"
 fi
 # Defaults for anything still unset (no terminal: CI, cron)
 INSTALL_CLAUDE="${INSTALL_CLAUDE:-0}"; INSTALL_DOCKER="${INSTALL_DOCKER:-0}"
 SETUP_TERMINAL="${SETUP_TERMINAL:-1}"; INSTALL_FONT="${INSTALL_FONT:-1}"; SETUP_SSH="${SETUP_SSH:-1}"
 if [ "$INSTALL_CLAUDE" = 1 ]; then CLAUDE_PLUGINS="${CLAUDE_PLUGINS-$ALL_PLUGINS}"; else CLAUDE_PLUGINS=""; fi
-CLAUDE_NTFY="${CLAUDE_NTFY:-0}"; [ "$INSTALL_CLAUDE" = 1 ] || CLAUDE_NTFY=0
+# Without a terminal (nothing was asked): on when a topic is known, from NTFY_TOPIC or an earlier setup
+if [ -z "${CLAUDE_NTFY:-}" ]; then
+  CLAUDE_NTFY=0
+  if [ -n "${NTFY_TOPIC:-}" ] || grep -qs '^NTFY_TOPIC=..*' "$STATE_DIR/ntfy"; then CLAUDE_NTFY=1; fi
+fi
+[ "$INSTALL_CLAUDE" = 1 ] || CLAUDE_NTFY=0
 
 # ntfy: the server, topic and token live only on this machine, in ~/.config/dotfiles/ntfy (mode 600),
 # never in the repo. Asked once; NTFY_URL / NTFY_TOPIC / NTFY_TOKEN preset them (e.g. without a terminal).
