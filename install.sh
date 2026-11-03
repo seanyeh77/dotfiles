@@ -662,14 +662,14 @@ export GIT_TERMINAL_PROMPT=0
 # Python is not here: each user gets their own from uv (below).
 case "$PM" in
   brew)    OS_REQ=(git tmux ripgrep:rg fd neovim:nvim node)
-           OS_OPT=(tree-sitter-cli:tree-sitter lazygit gh imagemagick:magick ghostscript:gs)
+           OS_OPT=(tree-sitter-cli:tree-sitter lazygit gh fzf imagemagick:magick ghostscript:gs)
            [ "$SETUP_SSH" = 1 ] && OS_OPT+=(trzsz-go:trzsz trzsz-ssh:tssh tsshd) ;;
   apt-get) OS_REQ=(git curl unzip tar gzip xz-utils:xz findutils:find tmux ripgrep:rg build-essential)
            if [ "$IS_TERMUX" = 1 ]; then
              # Termux: Neovim, Node.js, tree-sitter, uv and Python come from its packages too
              OS_REQ=(git curl unzip tar gzip xz-utils:xz findutils:find tmux ripgrep:rg build-essential perl
                      neovim:nvim nodejs-lts:node tree-sitter python:python3 uv)
-             OS_OPT=(fd lua-language-server lazygit gh wget)
+             OS_OPT=(fd lua-language-server lazygit gh fzf wget)
            else
              OS_OPT=(fd-find:fdfind clangd xclip perl wget imagemagick ghostscript:gs)
            fi ;;
@@ -680,7 +680,7 @@ case "$PM" in
   zypper)  OS_REQ=(git curl unzip tar gzip xz findutils:find tmux ripgrep:rg gcc gcc-c++:g++ make)
            OS_OPT=(fd clang-tools:clangd xclip perl wget ImageMagick:magick ghostscript:gs) ;;
   apk)     OS_REQ=(bash git curl unzip tar gzip xz findutils:find tmux perl ripgrep:rg build-base neovim:nvim nodejs:node npm)
-           OS_OPT=(fd clang-extra-tools:clangd lua-language-server tree-sitter-cli:tree-sitter lazygit github-cli:gh xclip wget imagemagick:magick ghostscript:gs) ;;
+           OS_OPT=(fd clang-extra-tools:clangd lua-language-server tree-sitter-cli:tree-sitter lazygit github-cli:gh fzf xclip wget imagemagick:magick ghostscript:gs) ;;
 esac
 # Claude Code on musl needs libgcc / libstdc++ (and uses the system ripgrep, already required)
 [ "$PM" = apk ] && [ "$INSTALL_CLAUDE" = 1 ] && OS_REQ+=(libgcc libstdc++)
@@ -885,6 +885,7 @@ if [ "$USE_PM_TOOLS" = 0 ]; then
   lookup uv "uv" gh_latest astral-sh/uv
   lookup lazygit "lazygit" gh_latest jesseduffield/lazygit
   lookup gh "GitHub CLI" gh_latest cli/cli
+  lookup fzf "fzf" gh_latest junegunn/fzf
   if [ -z "${PYTHON_VERSION:-}" ] && has uv; then lookup python "Python" lk_python; fi
 fi
 lk_dotfiles() { # the commit this install would use
@@ -1000,6 +1001,15 @@ if [ "$USE_PM_TOOLS" = 0 ]; then
   [ "$GH_CUR" = v ] && GH_CUR=""
   GH_LATEST="$(lookup_result gh)"
   outdated "$GH_CUR" "$GH_LATEST" && NEED_GH=1
+fi
+# fzf (fuzzy finder: Ctrl-R history, Ctrl-T files, Alt-C cd in the shell, see shell/env.sh): a static
+# binary in ~/.local/bin on Linux; macOS, Alpine and Termux take it from their package manager
+FZF_CUR=""; FZF_LATEST=""; NEED_FZF=0
+if [ "$USE_PM_TOOLS" = 0 ]; then
+  [ -x "$LOCAL_BIN/fzf" ] && FZF_CUR="v$("$LOCAL_BIN/fzf" --version 2>/dev/null | awk '{print $1}' || true)"
+  [ "$FZF_CUR" = v ] && FZF_CUR=""
+  FZF_LATEST="$(lookup_result fzf)"
+  outdated "$FZF_CUR" "$FZF_LATEST" && NEED_FZF=1
 fi
 PY_CUR=""; [ -x "$LOCAL_BIN/python3" ] && PY_CUR="$("$LOCAL_BIN/python3" --version 2>/dev/null | awk '{print $2}' || true)"
 PY_LATEST=""
@@ -1139,6 +1149,7 @@ fi
 [ "$NEED_UV" = 1 ]       && user_plan "uv" "$(change "$UV_CUR" "$UV_LATEST" "~/.local/bin")"
 [ "$NEED_LG" = 1 ]       && user_plan "lazygit" "$(change "$LG_CUR" "$LG_LATEST" "~/.local/bin")"
 [ "$NEED_GH" = 1 ]       && user_plan "GitHub CLI (gh)" "$(change "$GH_CUR" "$GH_LATEST" "~/.local/bin")"
+[ "$NEED_FZF" = 1 ]      && user_plan "fzf" "$(change "$FZF_CUR" "$FZF_LATEST" "~/.local/bin (Ctrl-R, Ctrl-T, Alt-C in the shell)")"
 for i in "${!TZ_TOOLS[@]}"; do
   [ "${TZ_NEED[$i]}" = 1 ] || continue
   case "${TZ_TOOLS[$i]%%|*}" in
@@ -1736,6 +1747,23 @@ job_gh() {
     failed "GitHub CLI ($v)"
   fi
 }
+job_fzf() {
+  # ---------- fzf (per user, Linux) ----------
+  if [ -z "$FZF_LATEST" ]; then FZF_LATEST="$(gh_latest junegunn/fzf)"; fi
+  if [ -z "$FZF_LATEST" ]; then
+    step "Installing fzf"
+    failed "fzf (could not look up the latest release)"
+    return 0
+  fi
+  step "Installing fzf $FZF_LATEST in ~/.local/bin"
+  mkdir -p "$TMP/fzf"
+  if fetch_once "https://github.com/junegunn/fzf/releases/download/$FZF_LATEST/fzf-${FZF_LATEST#v}-linux_$ARCH.tar.gz" "$TMP/fzf.tgz" \
+     && tar -C "$TMP/fzf" -xzf "$TMP/fzf.tgz" fzf && mv -f "$TMP/fzf/fzf" "$LOCAL_BIN/fzf"; then
+    if [ -n "$FZF_CUR" ]; then did "fzf $FZF_LATEST (was $FZF_CUR)"; else did "fzf $FZF_LATEST (new shells: Ctrl-R history, Ctrl-T files, Alt-C cd)"; fi
+  else
+    failed "fzf"
+  fi
+}
 job_uv() {
   # ---------- uv and Python (per user) ----------
   # uv installs into ~/.local/bin; `uv python install --default` adds python3 there too, so
@@ -2049,6 +2077,7 @@ job_claude_plugins() {
 { [ "$NEED_UV" = 1 ] || [ "$NEED_PY" = 1 ]; } && job uv "uv and Python" job_uv
 [ "$NEED_LG" = 1 ] && job lazygit "lazygit" job_lazygit
 [ "$NEED_GH" = 1 ] && job gh "GitHub CLI" job_gh
+[ "$NEED_FZF" = 1 ] && job fzf "fzf" job_fzf
 SSH_TODO=0
 for i in "${!TZ_TOOLS[@]}"; do [ "${TZ_NEED[$i]}" = 1 ] && SSH_TODO=1; done
 [ "$NEED_SSHCFG" = 1 ] && SSH_TODO=1

@@ -21,7 +21,7 @@ No copy of this repo stays behind: the files are copied into place (`~/.config/n
 
 - **System** (sudo, every user): only missing OS packages such as git, tmux, compilers and ripgrep; installed ones are never upgraded. Without sudo rights this step is skipped.
 - **Docker** (optional, off by default): Docker Desktop on macOS, Docker Engine with Compose on Linux, and you are added to the `docker` group so it runs without sudo (log in again first). Only offered when you have sudo; if Docker is already there, only the group is offered.
-- **Only you** (`~`, no sudo): Neovim, Node.js LTS, tree-sitter, [uv](https://docs.astral.sh/uv/), Python, lazygit, the [GitHub CLI](https://cli.github.com) (`gh`; sign in once with `gh auth login`), nvim plugins, LSP servers and Claude Code, kept at the latest release.
+- **Only you** (`~`, no sudo): Neovim, Node.js LTS, tree-sitter, [uv](https://docs.astral.sh/uv/), Python, lazygit, the [GitHub CLI](https://cli.github.com) (`gh`; sign in once with `gh auth login`), [fzf](https://github.com/junegunn/fzf), nvim plugins, LSP servers and Claude Code, kept at the latest release.
 - **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine, WSL and Termux, on amd64 or arm64.
 
 ## Terminal
@@ -151,4 +151,8 @@ Leave it off for servers whose firewall you cannot change (school or competition
 
 | Command | Action |
 | --- | --- |
+| `Ctrl-R` | fzf: search the command history (type a few letters, `Enter` puts the command on the line) |
+| `Ctrl-T` | fzf: pick files and insert their paths (`nvim ` then `Ctrl-T`) |
+| `Alt-C` | fzf: pick a folder and cd into it (Option-C on macOS; Left Option is Alt in iTerm2 and Ghostty) |
+| `**<Tab>` | fzf completion, e.g. `cd **<Tab>`, `ssh **<Tab>`, `kill **<Tab>` |
 | `sshk host` | ssh, but first copy your ed25519 key (`~/.ssh/id_ed25519`, created if missing) to the host if needed, so later logins need no password |

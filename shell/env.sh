@@ -72,3 +72,32 @@ sshk() {
   fi
   dotfiles_ssh "$@"
 }
+
+# fzf shell integration (interactive bash / zsh): Ctrl-R searches the command history, Ctrl-T
+# inserts files, Alt-C (Option-C on macOS) changes into a folder; `**<Tab>` completes paths, e.g.
+# `nvim **<Tab>`. Needs fzf 0.48 or newer (install.sh puts one in ~/.local/bin). Skipped when your
+# own setup already loaded it, or with DOTFILES_FZF=0. fd, when present, lists the files (it skips
+# .gitignore'd ones and is faster); the colours are Catppuccin Mocha. Your own FZF_* settings win.
+case "$-" in *i*)
+  if [ "${DOTFILES_FZF:-1}" != 0 ] && command -v fzf >/dev/null 2>&1; then
+    _fd=""; if command -v fd >/dev/null 2>&1; then _fd=fd; elif command -v fdfind >/dev/null 2>&1; then _fd=fdfind; fi
+    if [ -n "$_fd" ]; then
+      : "${FZF_DEFAULT_COMMAND:=$_fd --type f --hidden --follow --exclude .git}"
+      : "${FZF_CTRL_T_COMMAND:=$_fd --hidden --follow --exclude .git}"
+      : "${FZF_ALT_C_COMMAND:=$_fd --type d --hidden --follow --exclude .git}"
+      export FZF_DEFAULT_COMMAND FZF_CTRL_T_COMMAND FZF_ALT_C_COMMAND
+    fi
+    unset _fd
+    : "${FZF_DEFAULT_OPTS:=--height 40% --layout reverse --border \
+--color=bg+:#313244,bg:#1e1e2e,spinner:#f5e0dc,hl:#f38ba8,fg:#cdd6f4,header:#f38ba8,info:#cba6f7,pointer:#f5e0dc \
+--color=marker:#b4befe,fg+:#cdd6f4,prompt:#cba6f7,hl+:#f38ba8,selected-bg:#45475a,border:#6c7086}"
+    export FZF_DEFAULT_OPTS
+    # shellcheck disable=SC3044,SC1090  # bash / zsh only
+    if [ -n "${ZSH_VERSION:-}" ]; then
+      typeset -f fzf-history-widget >/dev/null 2>&1 || { _s="$(fzf --zsh 2>/dev/null)" && eval "$_s"; }
+    elif [ -n "${BASH_VERSION:-}" ]; then
+      declare -F __fzf_history__ >/dev/null 2>&1 || { _s="$(fzf --bash 2>/dev/null)" && eval "$_s"; }
+    fi
+    unset _s
+  fi ;;
+esac

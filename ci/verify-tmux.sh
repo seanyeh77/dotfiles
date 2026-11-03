@@ -29,5 +29,14 @@ done
 # GitHub CLI
 if command -v gh >/dev/null 2>&1 && gh --version >/dev/null 2>&1; then r=found; else r=missing; fi
 check "gh on PATH" "$r" "found"
+# fzf, and its shell integration from env.sh (Ctrl-R history widget) in an interactive bash and zsh
+if command -v fzf >/dev/null 2>&1 && fzf --bash >/dev/null 2>&1; then r=found; else r=missing; fi
+check "fzf on PATH (0.48+)" "$r" "found"
+if bash --norc -i -c '. "${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles/env.sh"; declare -F __fzf_history__' >/dev/null 2>&1; then r=loaded; else r=missing; fi
+check "fzf in bash" "$r" "loaded"
+if command -v zsh >/dev/null 2>&1; then
+  if zsh -f -i -c '. "${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles/env.sh"; typeset -f fzf-history-widget' >/dev/null 2>&1; then r=loaded; else r=missing; fi
+  check "fzf in zsh" "$r" "loaded"
+fi
 echo "========== tmux: $failed failed =========="
 exit "$failed"
