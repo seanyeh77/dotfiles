@@ -76,6 +76,7 @@ The leader key is `Space`. Press it and wait to see every binding.
 | `Ctrl-h/j/k/l` | Move between windows |
 | `gd` / `gr` / `K` | Definition / references / docs |
 | `Space cr` / `Space cf` | Rename / format |
+| `Space cA` | Source actions, e.g. Ruff "Fix all" in Python (also the fixes Ruff calls unsafe) |
 | `Space cs` | Outline: classes and their members (again to close) |
 | `Space ci` / `Space cI` | Parent classes / classes that inherit from this one (C++) |
 | `Ctrl-/` | Terminal |
@@ -87,6 +88,8 @@ The leader key is `Space`. Press it and wait to see every binding.
 | `Space gl`, then `Enter` | Compare the whole project with that commit: every changed file, your real files on the right (`gd` works there); `gm` shows the commit message, `q` closes |
 | `Space gg` | lazygit: stage, commit, push, browse history |
 | `:qa` | Quit |
+
+Saving a Python file also applies Ruff's safe fixes (unused imports, outdated syntax), then formats it; `Space uf` turns formatting on save off for the buffer.
 
 Supported languages are Python, C/C++, TypeScript, Rust, Go, Bash, Lua, JSON, YAML, TOML, Docker, Markdown and CMake. To add one, run `:LazyExtras`, or add an import line to `nvim/lua/config/lazy.lua`.
 
