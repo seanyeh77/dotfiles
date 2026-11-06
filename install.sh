@@ -82,6 +82,7 @@ term_cols() {
   local c
   c="$(stty size </dev/tty 2>/dev/null | awk '{print $2}' || true)"
   case "$c" in ''|*[!0-9]*) ;; *) [ "$c" -gt 20 ] && COLS="$c" ;; esac
+  return 0
 }
 term_cols
 [ "$UI" = 1 ] && exec >>"$INSTALL_LOG" 2>&1
@@ -365,7 +366,8 @@ fi
 # The answers are saved in ~/.config/dotfiles/answers and reused (DOTFILES_ASK=1 asks again).
 # Presets: INSTALL_CLAUDE=1|0, CLAUDE_PLUGINS="a b", INSTALL_DOCKER=1|0, SETUP_TERMINAL=1|0,
 # INSTALL_FONT=1|0 (DOTFILES_FONT=1|0 too), SETUP_SSH=1|0 (tssh, trzsz, tsshd; `ssh` runs tssh),
-# CLAUDE_NTFY=1|0 (ntfy push when Claude is done / needs you; NTFY_URL, NTFY_TOPIC, NTFY_TOKEN).
+# CLAUDE_NTFY=1|0 (ntfy push when Claude is done / needs you; NTFY_URL, NTFY_TOPIC, NTFY_TOKEN),
+# INSTALL_GH=1|0 (GitHub CLI, signed in at the end).
 # Without a terminal, unset ones take the defaults.
 # name|source|description; source is a marketplace (official, knowledge-work) or "skill"
 CLAUDE_WORKFLOW_PLUGINS=(
@@ -444,7 +446,7 @@ ntfy_preset="${CLAUDE_NTFY+set}"
 SAVED_ANSWERS=0
 if [ "${DOTFILES_ASK:-0}" != 1 ] && [ -f "$ANSWERS" ]; then
   [ -z "${CLAUDE_PLUGINS+set}" ] && grep -q '^CLAUDE_PLUGINS=' "$ANSWERS" && PLUGINS_SAVED=1
-  for k in INSTALL_CLAUDE CLAUDE_PLUGINS CLAUDE_PLUGINS_KNOWN INSTALL_DOCKER SETUP_TERMINAL INSTALL_FONT SETUP_SSH CLAUDE_NTFY; do
+  for k in INSTALL_CLAUDE CLAUDE_PLUGINS CLAUDE_PLUGINS_KNOWN INSTALL_DOCKER SETUP_TERMINAL INSTALL_FONT SETUP_SSH CLAUDE_NTFY INSTALL_GH; do
     v="$(sed -n "s/^$k=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$ANSWERS" | tail -1)"
     if [ -z "$(eval "echo \${$k+set}")" ] && grep -q "^$k=" "$ANSWERS"; then eval "$k=\"\$v\""; SAVED_ANSWERS=1; fi
   done
@@ -468,6 +470,9 @@ fi
 if [ -z "$ntfy_preset" ] && [ "${CLAUDE_NTFY:-}" = 0 ] && ! grep -qs '^ANSWERS_VERSION=[2-9]' "$ANSWERS"; then
   unset CLAUDE_NTFY
 fi
+# ntfy already set up here (a topic in ~/.config/dotfiles/ntfy, e.g. from NTFY_TOPIC=...): it is on,
+# and neither the checklist nor the topic questions come back for it
+if [ -z "${CLAUDE_NTFY:-}" ] && grep -qs '^NTFY_TOPIC=..*' "$STATE_DIR/ntfy"; then CLAUDE_NTFY=1; fi
 [ "${INSTALL_CLAUDE:-1}" != 0 ] && [ -z "${CLAUDE_NTFY:-}" ] && OPEN=1
 
 # The checklist, drawn on the terminal: ↑↓ (or j k) move, Space toggles, a / n all / none,
@@ -558,6 +563,7 @@ if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "
   [ -n "$TERM_OFFER" ] && m_add terminal "Terminal setup" "$TERM_OFFER: Catppuccin, Nerd Font, Option as Alt" main "${SETUP_TERMINAL:-1}"
   [ "$FONT_OFFER" = 1 ] && m_add font "JetBrainsMono Nerd Font" "the icons in nvim and tmux" main "${INSTALL_FONT:-1}"
   m_add ssh "SSH tools" "ssh runs tssh: tsz / trz file transfer, host menu, tsshd" main "${SETUP_SSH:-1}"
+  m_add gh "GitHub CLI (gh)" "pull requests, issues and Actions from the terminal; sign in at the end" main "${INSTALL_GH:-1}"
   m_run
   INSTALL_CLAUDE="$(m_value claude)"
   CLAUDE_PLUGINS=""
@@ -570,15 +576,17 @@ if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "
   [ -n "$TERM_OFFER" ] && SETUP_TERMINAL="$(m_value terminal)"
   [ "$FONT_OFFER" = 1 ] && INSTALL_FONT="$(m_value font)"
   SETUP_SSH="$(m_value ssh)"
+  INSTALL_GH="$(m_value gh)"
   SAVED_ANSWERS=0
   mkdir -p "$STATE_DIR"
-  printf 'ANSWERS_VERSION=2\nINSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nCLAUDE_PLUGINS_KNOWN="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\nSETUP_SSH=%s\nCLAUDE_NTFY=%s\n' \
+  printf 'ANSWERS_VERSION=2\nINSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nCLAUDE_PLUGINS_KNOWN="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\nSETUP_SSH=%s\nCLAUDE_NTFY=%s\nINSTALL_GH=%s\n' \
     "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "$ALL_PLUGINS" "${INSTALL_DOCKER:-0}" "${SETUP_TERMINAL:-1}" "${INSTALL_FONT:-1}" \
-    "${SETUP_SSH:-1}" "${CLAUDE_NTFY:-1}" > "$ANSWERS"
+    "${SETUP_SSH:-1}" "${CLAUDE_NTFY:-1}" "${INSTALL_GH:-1}" > "$ANSWERS"
 fi
 # Defaults for anything still unset (no terminal: CI, cron)
 INSTALL_CLAUDE="${INSTALL_CLAUDE:-0}"; INSTALL_DOCKER="${INSTALL_DOCKER:-0}"
 SETUP_TERMINAL="${SETUP_TERMINAL:-1}"; INSTALL_FONT="${INSTALL_FONT:-1}"; SETUP_SSH="${SETUP_SSH:-1}"
+INSTALL_GH="${INSTALL_GH:-1}"
 if [ "$INSTALL_CLAUDE" = 1 ]; then CLAUDE_PLUGINS="${CLAUDE_PLUGINS-$ALL_PLUGINS}"; else CLAUDE_PLUGINS=""; fi
 # Without a terminal (nothing was asked): on when a topic is known, from NTFY_TOPIC or an earlier setup
 if [ -z "${CLAUDE_NTFY:-}" ]; then
@@ -635,6 +643,7 @@ if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then CH="$CH $S_DOT terminal 
 [ "$want_font" = 1 ] && CH="$CH $S_DOT Nerd Font"
 [ "$SETUP_SSH" = 1 ] && CH="$CH $S_DOT SSH tools"
 [ "$CLAUDE_NTFY" = 1 ] && CH="$CH $S_DOT ntfy"
+[ "$INSTALL_GH" = 1 ] && CH="$CH $S_DOT gh"
 if [ "$SAVED_ANSWERS" = 1 ]; then CH="$CH  ${D}(saved; DOTFILES_ASK=1 to change)${N}"; fi
 log "Choices: $CH"
 [ -n "${NEW_PLUGINS:-}" ] && log "New in the Claude plugin list: $NEW_PLUGINS"
@@ -662,14 +671,14 @@ export GIT_TERMINAL_PROMPT=0
 # Python is not here: each user gets their own from uv (below).
 case "$PM" in
   brew)    OS_REQ=(git tmux ripgrep:rg fd neovim:nvim node)
-           OS_OPT=(tree-sitter-cli:tree-sitter lazygit gh fzf imagemagick:magick ghostscript:gs)
+           OS_OPT=(tree-sitter-cli:tree-sitter lazygit fzf imagemagick:magick ghostscript:gs)
            [ "$SETUP_SSH" = 1 ] && OS_OPT+=(trzsz-go:trzsz trzsz-ssh:tssh tsshd) ;;
   apt-get) OS_REQ=(git curl unzip tar gzip xz-utils:xz findutils:find tmux ripgrep:rg build-essential)
            if [ "$IS_TERMUX" = 1 ]; then
              # Termux: Neovim, Node.js, tree-sitter, uv and Python come from its packages too
              OS_REQ=(git curl unzip tar gzip xz-utils:xz findutils:find tmux ripgrep:rg build-essential perl
                      neovim:nvim nodejs-lts:node tree-sitter python:python3 uv)
-             OS_OPT=(fd lua-language-server lazygit gh fzf wget)
+             OS_OPT=(fd lua-language-server lazygit fzf wget)
            else
              OS_OPT=(fd-find:fdfind clangd xclip perl wget imagemagick ghostscript:gs)
            fi ;;
@@ -680,10 +689,15 @@ case "$PM" in
   zypper)  OS_REQ=(git curl unzip tar gzip xz findutils:find tmux ripgrep:rg gcc gcc-c++:g++ make)
            OS_OPT=(fd clang-tools:clangd xclip perl wget ImageMagick:magick ghostscript:gs) ;;
   apk)     OS_REQ=(bash git curl unzip tar gzip xz findutils:find tmux perl ripgrep:rg build-base neovim:nvim nodejs:node npm)
-           OS_OPT=(fd clang-extra-tools:clangd lua-language-server tree-sitter-cli:tree-sitter lazygit github-cli:gh fzf xclip wget imagemagick:magick ghostscript:gs) ;;
+           OS_OPT=(fd clang-extra-tools:clangd lua-language-server tree-sitter-cli:tree-sitter lazygit fzf xclip wget imagemagick:magick ghostscript:gs) ;;
 esac
 # Claude Code on musl needs libgcc / libstdc++ (and uses the system ripgrep, already required)
 [ "$PM" = apk ] && [ "$INSTALL_CLAUDE" = 1 ] && OS_REQ+=(libgcc libstdc++)
+# GitHub CLI from the package manager where it is current (elsewhere ~/.local/bin, see job_gh)
+if [ "$INSTALL_GH" = 1 ]; then
+  case "$PM" in brew) OS_OPT+=(gh) ;; apk) OS_OPT+=(github-cli:gh) ;; esac
+  [ "${IS_TERMUX:-0}" = 1 ] && OS_OPT+=(gh)
+fi
 BREW_LIST=""
 # `brew list` fails when no formula is installed yet (a fresh Homebrew): that just means none
 if [ "$PM" = brew ] && has brew; then BREW_LIST=" $(brew list --formula -1 2>/dev/null | tr '\n' ' ' || true) "; fi
@@ -884,7 +898,7 @@ if [ "$USE_PM_TOOLS" = 0 ]; then
   lookup ts "tree-sitter CLI" gh_latest tree-sitter/tree-sitter
   lookup uv "uv" gh_latest astral-sh/uv
   lookup lazygit "lazygit" gh_latest jesseduffield/lazygit
-  lookup gh "GitHub CLI" gh_latest cli/cli
+  [ "$INSTALL_GH" = 1 ] && lookup gh "GitHub CLI" gh_latest cli/cli
   lookup fzf "fzf" gh_latest junegunn/fzf
   if [ -z "${PYTHON_VERSION:-}" ] && has uv; then lookup python "Python" lk_python; fi
 fi
@@ -996,7 +1010,7 @@ fi
 # GitHub CLI (gh: pull requests, issues, Actions from the terminal; Claude Code uses it too): a static
 # binary in ~/.local/bin on Linux, like lazygit; macOS, Alpine and Termux take it from their package manager
 GH_CUR=""; GH_LATEST=""; NEED_GH=0
-if [ "$USE_PM_TOOLS" = 0 ]; then
+if [ "$USE_PM_TOOLS" = 0 ] && [ "$INSTALL_GH" = 1 ]; then
   [ -x "$LOCAL_BIN/gh" ] && GH_CUR="v$("$LOCAL_BIN/gh" --version 2>/dev/null | sed -n '1s/^gh version \([^ ]*\).*/\1/p' || true)"
   [ "$GH_CUR" = v ] && GH_CUR=""
   GH_LATEST="$(lookup_result gh)"
@@ -2155,8 +2169,30 @@ if [ "$RM_OLD" = 1 ]; then
   rm -rf "${HOME:?}/dotfiles" && did "removed the old ~/dotfiles (no longer used)"
 fi
 
+# ---------- GitHub CLI: sign in once ----------
+# gh keeps its token in ~/.config/gh (or the system keychain). Already signed in: nothing is asked.
+# On a terminal it offers `gh auth login` now (it asks GitHub.com / HTTPS / browser or token);
+# without one, the next steps say so.
+GH_SIGNIN=0
+if [ "$INSTALL_GH" = 1 ] && has gh && ! gh auth status >/dev/null 2>&1; then
+  if [ "$HAS_TTY" = 1 ] && [ "${ASSUME_YES:-0}" != 1 ]; then
+    step_end # the line of the previous step is finished before the question
+    printf '\n  %sGitHub CLI%s: sign in to GitHub now? %s[Y/n]%s ' "$TB" "$TN" "$TD" "$TN" >/dev/tty
+    k=""; IFS= read -rsn1 k </dev/tty || k=n
+    case "$k" in
+      [Nn]|[Qq]|"$ESC") printf 'later\n' >/dev/tty ;;
+      *) printf 'yes\n\n' >/dev/tty
+         printf '%s[?25h' "$ESC" >/dev/tty
+         gh auth login </dev/tty >/dev/tty 2>&1 || true
+         printf '\n' >/dev/tty ;;
+    esac
+  fi
+  if gh auth status >/dev/null 2>&1; then did "GitHub CLI: signed in"; else GH_SIGNIN=1; fi
+fi
+
 # ---------- Next steps (on every run, so nothing is forgotten) ----------
 NEXT=("Open a new shell, then run nvim or tmux (:checkhealth and :Mason show the details)")
+[ "$GH_SIGNIN" = 1 ] && NEXT+=("Sign in to GitHub: gh auth login")
 NEXT+=(${TERM_NEXT[@]+"${TERM_NEXT[@]}"})
 [ "${DOCKER_RELOGIN:-0}" = 1 ] && NEXT+=("Docker: log out and back in (or run: newgrp docker), then docker runs without sudo")
 [ "${DOCKER_NO_SERVICE:-0}" = 1 ] && NEXT+=("Docker: no systemd here, so the daemon was not started (run: sudo dockerd &)")
