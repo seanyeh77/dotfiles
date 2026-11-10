@@ -1979,9 +1979,32 @@ job_parsers() {
         did "Rust (rustup, in ~/.cargo)"
         CARGO="$HOME/.cargo/bin/cargo"
       fi
-      if [ -n "$TS_LATEST" ]; then "$CARGO" install --locked --force tree-sitter-cli --version "${TS_LATEST#v}"
-      else "$CARGO" install --locked --force tree-sitter-cli; fi
-      ln -sf "$HOME/.cargo/bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
+      ts_args=(install --locked --force tree-sitter-cli)
+      [ -n "$TS_LATEST" ] && ts_args+=(--version "${TS_LATEST#v}")
+      ts_built=0
+      if "$CARGO" "${ts_args[@]}"; then ts_built=1
+      else
+        # rustc panics when it cannot start its threads, e.g. under a shared server's per-user
+        # process limit: once more, one crate and one codegen thread at a time
+        note "build failed, trying again one step at a time (slower)"
+        if CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 "$CARGO" "${ts_args[@]}" -j 1; then ts_built=1; fi
+      fi
+      if [ "$ts_built" = 1 ]; then
+        ln -sf "$HOME/.cargo/bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
+      else
+        # The prebuilt binary may need GLIBC_2.39 only "weakly": it runs, but prints a warning
+        # each time. Then use it through a wrapper that drops that one line.
+        ts_npm="$LOCAL_OPT/tree-sitter-cli/node_modules/.bin/tree-sitter"
+        if v="$("$ts_npm" --version 2>&1)" && case "$v" in *"weak version"*"tree-sitter "*) true ;; *) false ;; esac; then
+          rm -f "$LOCAL_BIN/tree-sitter"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            '# dotfiles: the prebuilt tree-sitter, without the "weak version GLIBC_2.39" warning' \
+            "\"$ts_npm\" \"\$@\" 2> >(grep -v 'weak version .GLIBC_' >&2)" \
+            'rc=$?; wait $! 2>/dev/null; exit $rc' > "$LOCAL_BIN/tree-sitter"
+          chmod +x "$LOCAL_BIN/tree-sitter"
+          note "using the prebuilt tree-sitter (it runs on this glibc; its warning is hidden)"
+        fi
+      fi
       hash -r
     fi
     if ts_works "$LOCAL_BIN/tree-sitter"; then
