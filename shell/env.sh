@@ -55,6 +55,11 @@ dotfiles_ssh() {
   elif [ -t 0 ] && [ -t 1 ] && command -v trzsz >/dev/null 2>&1; then TERM="$_t" trzsz ssh "$@"
   else TERM="$_t" command ssh "$@"; fi
 }
+# gh asks the terminal for its background colour; over ssh the answer can arrive late and break
+# its prompts ("could not prompt: unexpected escape sequence from terminal"). A set GLAMOUR_STYLE
+# skips the question (dark: Catppuccin Mocha and most terminal themes).
+if [ -n "${SSH_CONNECTION:-}" ] && [ -z "${GLAMOUR_STYLE:-}" ]; then export GLAMOUR_STYLE=dark; fi
+
 # Not when "SSH tools" is unticked in the installer's checklist (SETUP_SSH=0 in its saved answers)
 if [ -z "${SSH_CONNECTION:-}" ] && { command -v tssh >/dev/null 2>&1 || command -v trzsz >/dev/null 2>&1; } \
    && ! grep -qs '^SETUP_SSH=0' "${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles/answers"; then

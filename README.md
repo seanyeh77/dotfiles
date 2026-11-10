@@ -21,7 +21,7 @@ No copy of this repo stays behind: the files are copied into place (`~/.config/n
 
 - **System** (sudo, every user): only missing OS packages such as git, tmux, compilers and ripgrep; installed ones are never upgraded. Without sudo rights this step is skipped.
 - **Docker** (optional, off by default): Docker Desktop on macOS, Docker Engine with Compose on Linux, and you are added to the `docker` group so it runs without sudo (log in again first). Only offered when you have sudo; if Docker is already there, only the group is offered.
-- **Only you** (`~`, no sudo): Neovim, Node.js LTS, tree-sitter, [uv](https://docs.astral.sh/uv/), Python, lazygit, the [GitHub CLI](https://cli.github.com) (`gh`, in the checklist; at the end the installer offers `gh auth login` if you are not signed in), [fzf](https://github.com/junegunn/fzf), nvim plugins, LSP servers and Claude Code, kept at the latest release.
+- **Only you** (`~`, no sudo): Neovim, Node.js LTS, tree-sitter, [uv](https://docs.astral.sh/uv/), Python, lazygit, the [GitHub CLI](https://cli.github.com) (`gh`, in the checklist; at the end the installer offers `gh auth login` if you are not signed in; over ssh `GLAMOUR_STYLE=dark` is set so gh's prompts are not broken by the terminal's late reply to its colour query), [fzf](https://github.com/junegunn/fzf), nvim plugins, LSP servers and Claude Code, kept at the latest release.
 - **OS**: macOS, Debian, Ubuntu, Fedora, RHEL, Arch, openSUSE, Alpine, WSL and Termux, on amd64 or arm64.
 
 ## Terminal
@@ -150,7 +150,7 @@ Leave it off for servers whose firewall you cannot change (school or competition
 
 ## Shell
 
-`~/.config/dotfiles/env.sh` (from `shell/env.sh`) is loaded from `~/.bashrc` and `~/.zshrc`. It puts `~/.local/bin` and Mason's tools on `PATH`, loads Ghostty's shell integration, and adds:
+`~/.config/dotfiles/env.sh` (from `shell/env.sh`) is loaded from `~/.bashrc` and `~/.zshrc`, and from the bash login file (`~/.bash_profile`, `~/.bash_login` or `~/.profile`) when that one does not read `~/.bashrc`, as on some school and lab servers; with none of them, a `~/.bash_profile` that reads `~/.bashrc` is created. It puts `~/.local/bin` and Mason's tools on `PATH`, loads Ghostty's shell integration, and adds:
 
 | Command | Action |
 | --- | --- |

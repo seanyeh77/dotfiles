@@ -1630,6 +1630,23 @@ for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
   fi
   grep -qsF "$SOURCE_LINE" "$rc" || printf '\n%s\n' "$SOURCE_LINE" >> "$rc"
 done
+# An ssh login runs bash as a login shell, which reads only the first of ~/.bash_profile,
+# ~/.bash_login and ~/.profile, not ~/.bashrc. Most of those read ~/.bashrc; some systems ship
+# one that does not (then nothing in ~/.local/bin is found after logging in). Add the line there
+# too; with none of them, create ~/.bash_profile that reads ~/.bashrc, as Debian's ~/.profile does.
+case "${SHELL:-}" in
+  */bash)
+    BASH_LOGIN=""
+    for f in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+      [ -f "$f" ] && { BASH_LOGIN="$f"; break; }
+    done
+    if [ -z "$BASH_LOGIN" ]; then
+      printf '%s\n' '# dotfiles: a login shell (ssh) reads this file, not ~/.bashrc' \
+        '[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"' > "$HOME/.bash_profile"
+    elif ! grep -qs 'bashrc' "$BASH_LOGIN" && ! grep -qsF "$SOURCE_LINE" "$BASH_LOGIN"; then
+      printf '\n%s\n' "$SOURCE_LINE" >> "$BASH_LOGIN"
+    fi ;;
+esac
 # shellcheck source=shell/env.sh
 . "$STATE_DIR/env.sh"
 
@@ -1986,12 +2003,26 @@ job_parsers() {
 }
 claude_setup_plugins() { # the official marketplace and the helpers for installing plugins and skills
     MP=claude-plugins-official
-    claude plugin marketplace add "anthropics/$MP" >/dev/null 2>&1 || true
+    claude plugin marketplace add "anthropics/$MP" >&2 2>&1 || true # its output goes to the log
     INSTALLED_PLUGINS="$(claude plugin list 2>/dev/null || true)"
+    MP_REFRESHED=" "
     claude_plugin() { # claude_plugin NAME [MARKETPLACE]
-      local mp="${2:-$MP}"
+      local mp="${2:-$MP}" out
       case "$INSTALLED_PLUGINS" in *"$1@$mp"*) return 0 ;; esac
-      if claude plugin install "$1@$mp" >/dev/null 2>&1; then did "Claude plugin $1"; else failed "Claude plugin $1@$mp"; fi
+      if out="$(claude plugin install "$1@$mp" 2>&1)"; then did "Claude plugin $1"; return 0; fi
+      # Once more after refreshing the marketplace (once per marketplace): a clone cut short or
+      # out of date fails every plugin that lives in it
+      case "$MP_REFRESHED" in
+        *" $mp "*) ;;
+        *) MP_REFRESHED="$MP_REFRESHED$mp "
+           claude plugin marketplace update "$mp" >&2 2>&1 || true
+           if out="$(claude plugin install "$1@$mp" 2>&1)"; then did "Claude plugin $1"; return 0; fi ;;
+      esac
+      # Claude's own message, in the log and (its last line) in the summary
+      printf 'claude plugin install %s@%s:\n%s\n' "$1" "$mp" "$out" >&2
+      out="$(printf '%s\n' "$out" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g; /^[[:space:]]*$/d' | tail -n 1 \
+        | sed 's/.*Failed to install plugin "[^"]*": //' | cut -c1-140)"
+      failed "Claude plugin $1@$mp${out:+ ($out)}"
     }
     # A skill that is not packaged as a plugin: clone its repo and link the skill folder into
     # ~/.claude/skills, where Claude Code picks up user skills
@@ -2070,7 +2101,7 @@ job_claude_plugins() {
       case "$(plugin_source "$p")" in
         official) claude_plugin "$p" ;;
         knowledge-work)
-          claude plugin marketplace add anthropics/knowledge-work-plugins >/dev/null 2>&1 || true
+          claude plugin marketplace add anthropics/knowledge-work-plugins >&2 2>&1 || true
           claude_plugin "$p" knowledge-work-plugins ;;
         skill)
           case "$p" in
@@ -2171,7 +2202,7 @@ fi
 
 # ---------- GitHub CLI: sign in once ----------
 # gh keeps its token in ~/.config/gh (or the system keychain). Already signed in: nothing is asked.
-# On a terminal it offers `gh auth login` now (it asks GitHub.com / HTTPS / browser or token);
+# On a terminal it offers `gh auth login` now (it asks HTTPS or SSH, browser or token);
 # without one, the next steps say so.
 GH_SIGNIN=0
 if [ "$INSTALL_GH" = 1 ] && has gh && ! gh auth status >/dev/null 2>&1; then
@@ -2183,7 +2214,12 @@ if [ "$INSTALL_GH" = 1 ] && has gh && ! gh auth status >/dev/null 2>&1; then
       [Nn]|[Qq]|"$ESC") printf 'later\n' >/dev/tty ;;
       *) printf 'yes\n\n' >/dev/tty
          printf '%s[?25h' "$ESC" >/dev/tty
-         gh auth login </dev/tty >/dev/tty 2>&1 || true
+         # gh asks the terminal for its background colour (OSC 11). Over a slow ssh link the
+         # answer arrives after gh stopped waiting and lands in its prompt ("unexpected escape
+         # sequence from terminal"). A set GLAMOUR_STYLE skips the question; keys typed or late
+         # answers still waiting on the terminal are dropped first. GitHub.com, no host menu.
+         while IFS= read -rsn1 -t 0.3 _ </dev/tty 2>/dev/null; do :; done
+         GLAMOUR_STYLE="${GLAMOUR_STYLE:-dark}" gh auth login -h github.com </dev/tty >/dev/tty 2>&1 || true
          printf '\n' >/dev/tty ;;
     esac
   fi
