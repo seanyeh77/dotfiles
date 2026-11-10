@@ -159,3 +159,7 @@ Leave it off for servers whose firewall you cannot change (school or competition
 | `Alt-C` | fzf: pick a folder and cd into it (Option-C on macOS; Left Option is Alt in iTerm2 and Ghostty) |
 | `**<Tab>` | fzf completion, e.g. `cd **<Tab>`, `ssh **<Tab>`, `kill **<Tab>` |
 | `sshk host` | ssh, but first copy your ed25519 key (`~/.ssh/id_ed25519`, created if missing) to the host if needed, so later logins need no password |
+
+On a home folder reached through a link (NFS homes such as `/u/cs/...` → `/net/...`), env.sh also sets `CLAUDE_CODE_PLUGIN_CACHE_DIR` to the real path of `~/.claude/plugins`: otherwise Claude Code takes its plugin folder for a network drive and ignores most plugins. The installer then adds such marketplaces again and reinstalls their plugins.
+
+Go support in nvim (gopls, goimports, gofumpt) is turned on only with Go 1.21 or newer, which fetches the newer Go these tools need by itself; an older system Go (Debian 12: 1.19) is left alone. On systems whose glibc is too old for the prebuilt tree-sitter CLI, it is built with Rust from rustup in `~/.cargo` (the system's Rust is often too old for it).

@@ -31,8 +31,24 @@ local spec = {
   { import = "lazyvim.plugins.extras.lang.cmake" },
   { import = "lazyvim.plugins.extras.formatting.prettier" },
 }
--- The Go tools are built with `go install`, so only enable Go when Go is installed
-if vim.fn.executable("go") == 1 then
+-- The Go tools are built with `go install`, so only enable Go when Go is installed, and is 1.21+:
+-- current gopls / gofumpt need a newer Go than older distros ship (Debian 12: 1.19), and from 1.21
+-- on `go` fetches the newer toolchain itself. The version is read from GOROOT/VERSION (no process).
+local function go_ok()
+  local exe = vim.fn.exepath("go")
+  if exe == "" then return false end
+  local real = vim.uv.fs_realpath(exe) or exe
+  local f = io.open(vim.fs.dirname(vim.fs.dirname(real)) .. "/VERSION", "r")
+  local v = f and f:read("*l") or nil
+  if f then f:close() end
+  if not v or not v:match("^go%d") then
+    v = vim.trim(vim.fn.system({ exe, "env", "GOVERSION" }))
+  end
+  local major, minor = v:match("^go(%d+)%.(%d+)")
+  if not major then return true end -- unknown (e.g. a devel build): let Mason try
+  return tonumber(major) > 1 or tonumber(minor) >= 21
+end
+if go_ok() then
   table.insert(spec, { import = "lazyvim.plugins.extras.lang.go" })
 end
 -- Claude Code IDE integration (claudecode.nvim): Claude sees the file and selection you are

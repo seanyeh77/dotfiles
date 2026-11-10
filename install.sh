@@ -1962,12 +1962,23 @@ job_parsers() {
     # it fails with "GLIBC_2.39 not found", so build it from source with cargo instead.
     if ! ts_works "$LOCAL_BIN/tree-sitter"; then
       step "tree-sitter binary needs newer glibc, building from source with cargo (takes a few minutes)"
-      if ! has cargo && [ ! -x "$HOME/.cargo/bin/cargo" ]; then
-        fetch https://sh.rustup.rs "$TMP/rustup.sh"
-        sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null
-        did "Rust (rustup, in ~/.cargo)"
+      # tree-sitter-cli needs a recent Rust (edition 2024, Rust 1.85+); the OS's cargo is often
+      # older (Debian 12: 1.63, "failed to parse manifest"). Use rustup's in ~/.cargo, kept current.
+      CARGO=""
+      if [ -x "$HOME/.cargo/bin/rustup" ]; then
+        "$HOME/.cargo/bin/rustup" update stable --no-self-update >/dev/null 2>&1 || true
+        CARGO="$HOME/.cargo/bin/cargo"
+      elif has cargo; then
+        m="$(cargo --version 2>/dev/null | sed -n 's/^cargo 1\.\([0-9]*\).*/\1/p')"
+        [ "${m:-0}" -ge 85 ] && CARGO="$(command -v cargo)"
       fi
-      CARGO="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
+      if [ -z "$CARGO" ]; then
+        fetch https://sh.rustup.rs "$TMP/rustup.sh"
+        # SKIP_PATH_CHECK: install next to the OS's Rust, which stays as it is
+        RUSTUP_INIT_SKIP_PATH_CHECK=yes sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null
+        did "Rust (rustup, in ~/.cargo)"
+        CARGO="$HOME/.cargo/bin/cargo"
+      fi
       if [ -n "$TS_LATEST" ]; then "$CARGO" install --locked --force tree-sitter-cli --version "${TS_LATEST#v}"
       else "$CARGO" install --locked --force tree-sitter-cli; fi
       ln -sf "$HOME/.cargo/bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
@@ -2001,8 +2012,39 @@ job_parsers() {
     failed "some treesitter parsers (open nvim and run :checkhealth nvim-treesitter)"
   fi
 }
+claude_fix_marketplaces() {
+    # Marketplaces added before env.sh gave Claude Code the real path of its plugin folder (home
+    # folder behind a link, see CLAUDE_CODE_PLUGIN_CACHE_DIR in env.sh) keep the linked path and
+    # stay ignored: remove them, add them again and reinstall their plugins. Once per marketplace.
+    local km="${CLAUDE_CODE_PLUGIN_CACHE_DIR:-}/known_marketplaces.json" mp src plugins p
+    [ -n "${CLAUDE_CODE_PLUGIN_CACHE_DIR:-}" ] && [ -f "$km" ] || return 0
+    node -e '
+      const fs = require("fs"), dir = process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR;
+      const km = JSON.parse(fs.readFileSync(dir + "/known_marketplaces.json", "utf8"));
+      let ip = {}; try { ip = JSON.parse(fs.readFileSync(dir + "/installed_plugins.json", "utf8")).plugins || {}; } catch {}
+      for (const [mp, m] of Object.entries(km)) {
+        const loc = String(m.installLocation || ""), src = m.source || {};
+        if (loc === "" || loc.startsWith(dir + "/")) continue;
+        const from = src.repo || src.url || src.path;
+        if (!from) continue;
+        const plugins = Object.keys(ip).filter((k) => k.endsWith("@" + mp) && (ip[k] || []).some((e) => e.scope === "user"));
+        console.log([mp, from, plugins.join(" ")].join("\t"));
+      }' 2>/dev/null > "$TMP/claude-mps" || return 0
+    while IFS=$'\t' read -r mp src plugins; do
+      [ -n "$mp" ] || continue
+      claude plugin marketplace remove "$mp" >&2 2>&1 || true
+      if ! claude plugin marketplace add "$src" >&2 2>&1; then
+        failed "Claude marketplace $mp (add it again: claude plugin marketplace add $src)"; continue
+      fi
+      for p in $plugins; do
+        if claude plugin install "$p" >&2 2>&1; then did "Claude plugin ${p%@*} (reinstalled, it was ignored)"
+        else failed "Claude plugin $p"; fi
+      done
+    done < "$TMP/claude-mps"
+}
 claude_setup_plugins() { # the official marketplace and the helpers for installing plugins and skills
     MP=claude-plugins-official
+    claude_fix_marketplaces
     claude plugin marketplace add "anthropics/$MP" >&2 2>&1 || true # its output goes to the log
     INSTALLED_PLUGINS="$(claude plugin list 2>/dev/null || true)"
     MP_REFRESHED=" "

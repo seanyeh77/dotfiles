@@ -55,6 +55,16 @@ dotfiles_ssh() {
   elif [ -t 0 ] && [ -t 1 ] && command -v trzsz >/dev/null 2>&1; then TERM="$_t" trzsz ssh "$@"
   else TERM="$_t" command ssh "$@"; fi
 }
+# Claude Code plugins on a home folder reached through a link (e.g. /u/cs/... -> /net/...: NFS
+# homes on school and lab servers). Claude Code then judges its own plugin folder to be on a
+# network drive and ignores most plugins ("added but ignored", "does not stay inside the
+# marketplace directory"). Giving it the folder's real path fixes that; harmless elsewhere.
+if [ -z "${CLAUDE_CODE_PLUGIN_CACHE_DIR:-}" ] && [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then
+  _r="$(cd -P "$HOME" 2>/dev/null && pwd)"
+  if [ -n "$_r" ] && [ "$_r" != "$HOME" ]; then export CLAUDE_CODE_PLUGIN_CACHE_DIR="$_r/.claude/plugins"; fi
+  unset _r
+fi
+
 # gh asks the terminal for its background colour; over ssh the answer can arrive late and break
 # its prompts ("could not prompt: unexpected escape sequence from terminal"). A set GLAMOUR_STYLE
 # skips the question (dark: Catppuccin Mocha and most terminal themes).
