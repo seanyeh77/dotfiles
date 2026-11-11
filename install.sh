@@ -1643,7 +1643,9 @@ case "${SHELL:-}" in
     if [ -z "$BASH_LOGIN" ]; then
       printf '%s\n' '# dotfiles: a login shell (ssh) reads this file, not ~/.bashrc' \
         '[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"' > "$HOME/.bash_profile"
-    elif ! grep -qs 'bashrc' "$BASH_LOGIN" && ! grep -qsF "$SOURCE_LINE" "$BASH_LOGIN"; then
+    # "reads ~/.bashrc": a line that sources it, not a comment that only mentions it
+    elif ! grep -qsE '^[^#]*(^|[;&|{[:space:]])(\.|source)[[:space:]]+[^#]*bashrc' "$BASH_LOGIN" \
+         && ! grep -qsF "$SOURCE_LINE" "$BASH_LOGIN"; then
       printf '\n%s\n' "$SOURCE_LINE" >> "$BASH_LOGIN"
     fi ;;
 esac
