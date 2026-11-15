@@ -142,6 +142,7 @@ warn() {
   printf '!! %s\n' "$*" >&2
 }
 die() {
+  DIED=1
   spin_stop
   if [ "$UI" = 1 ]; then
     printf '\n  %s%s%s %s\n' "$R" "$S_BAD" "$N" "$*" >&4
@@ -856,7 +857,32 @@ if has git && git config --global --includes --get-regexp '^url\..*\.insteadof$'
   done
   export GIT_CONFIG_GLOBAL="$TMP/gitconfig"
 fi
-trap 'spin_stop; printf "%s[?25h" "$ESC" >&3; rm -rf "$TMP"' EXIT
+# free_mb DIR: free space in MB on DIR's filesystem (empty if unknown; a user quota is not seen)
+free_mb() { df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print int($4 / 1024) }'; }
+# Stopped by an error that was not reported (set -e): say so on the screen. A full disk is the
+# usual cause; then not even the log can be written, so the space left is shown here.
+stopped() {
+  local rc="$1" h t
+  [ "$rc" = 0 ] || [ "$rc" = 130 ] || [ "${DIED:-0}" = 1 ] || {
+    h="$(free_mb "$HOME")"; t="$(free_mb "${TMPDIR:-/tmp}")"
+    printf '\n  %s%s%s Stopped unexpectedly (exit %s). Free space: %s MB in ~, %s MB in %s.\n' \
+      "$R" "$S_BAD" "$N" "$rc" "${h:-?}" "${t:-?}" "${TMPDIR:-/tmp}" >&4
+    printf '    %sA full disk or quota stops downloads (tar "Wrote only", curl (23)). Free some space\n    (df -h ~ /tmp; du -sh ~/.cache ~/.local/share/* | sort -h), then run it again. Log: %s%s\n' \
+      "$D" "$INSTALL_LOG" "$N" >&4
+  } 2>/dev/null || true
+}
+trap 'rc=$?; spin_stop; [ "$UI" = 1 ] && printf "%s[?25h" "$ESC" >&3; stopped "$rc"; rm -rf "$TMP"' EXIT
+# Not enough space for the downloads: stop now with a clear message, not halfway through.
+# A first install takes about 2 GB in ~ (Node.js, Mason's servers, Claude Code, parsers); temporary
+# files go to $TMPDIR (/tmp).
+SPACE_HOME="$(free_mb "$HOME")"; SPACE_TMP="$(free_mb "$TMP")"
+if [ -n "$SPACE_HOME" ] && [ "$SPACE_HOME" -lt 500 ]; then
+  die "only $SPACE_HOME MB free in ~ ($HOME); free at least 2 GB (df -h ~; du -sh ~/.cache ~/.local/share/* | sort -h), then run this again"
+fi
+if [ -n "$SPACE_TMP" ] && [ "$SPACE_TMP" -lt 300 ]; then
+  die "only $SPACE_TMP MB free for temporary files (${TMPDIR:-/tmp}); free some space there, or run with TMPDIR=~/tmp"
+fi
+[ -n "$SPACE_HOME" ] && [ "$SPACE_HOME" -lt 2048 ] && warn "only $SPACE_HOME MB free in ~: a first install needs about 2 GB"
 LOOKUP="$TMP/lookup"; mkdir -p "$LOOKUP"
 L_PIDS=(); L_NAMES=(); L_LABELS=()
 lookup() { # lookup NAME LABEL FUNCTION...
