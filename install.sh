@@ -2320,7 +2320,17 @@ if [ "$INSTALL_GH" = 1 ] && has gh && ! gh auth status >/dev/null 2>&1; then
 fi
 
 # ---------- Next steps (on every run, so nothing is forgotten) ----------
-NEXT=("Open a new shell, then run nvim or tmux (:checkhealth and :Mason show the details)")
+NEXT=()
+# Failures because the disk filled up: say so first, the rest only works once there is room
+if [ ${#FAILED[@]} -gt 0 ]; then
+  SPACE_END="$(free_mb "$HOME")"
+  # install.log is new each run (Mason's own log keeps old runs, so it is not read)
+  if grep -qsi 'ENOSPC\|No space left on device' "$INSTALL_LOG" || [ "${SPACE_END:-999}" -lt 200 ]; then
+    FAILED+=("(the disk is full: ${SPACE_END:-?} MB free in ~)")
+    NEXT+=("Free some space or grow the disk (df -h ~; du -sh ~/.cache ~/.local/share/* | sort -h), then run this again: the items under Not installed failed for lack of space")
+  fi
+fi
+NEXT+=("Open a new shell, then run nvim or tmux (:checkhealth and :Mason show the details)")
 [ "$GH_SIGNIN" = 1 ] && NEXT+=("Sign in to GitHub: gh auth login")
 NEXT+=(${TERM_NEXT[@]+"${TERM_NEXT[@]}"})
 [ "${DOCKER_RELOGIN:-0}" = 1 ] && NEXT+=("Docker: log out and back in (or run: newgrp docker), then docker runs without sudo")
