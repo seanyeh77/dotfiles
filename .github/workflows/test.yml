@@ -114,6 +114,7 @@ jobs:
           - { image: "ubuntu:22.04" }
           - { image: "fedora:latest" }
           - { image: "rockylinux:9", docker: true } # Docker from its CentOS repository
+          - { image: "rockylinux:8" } # glibc 2.28 (RHEL 8): Neovim from neovim-releases, tree-sitter built with Rust
           - { image: "archlinux:latest", docker: true } # Docker from the distro
           - { image: "opensuse/tumbleweed" }
           - { image: "alpine:latest", experimental: true } # musl: some Mason binaries cannot run

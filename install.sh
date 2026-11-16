@@ -915,7 +915,12 @@ lk_claude() {
   # Same version numbers as the native build
   fetch_quiet https://registry.npmjs.org/@anthropic-ai/claude-code/latest | grep -o '"version":"[^"]*"' | sed -n '1s/.*:"\(.*\)"/\1/p'
 }
-[ "$USE_PM_NVIM" = 0 ] && lookup nvim "Neovim" gh_latest neovim/neovim
+# The official Linux build needs glibc 2.34+; on older systems (RHEL / Rocky 8: 2.28, Debian 11:
+# 2.31) use neovim/neovim-releases, the same Neovim built for glibc 2.17 (its tags can lag a few days)
+NVIM_REPO=neovim/neovim
+GLIBC_VER="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{ print $2 }')"; gm="${GLIBC_VER#2.}"; gm="${gm%%.*}"
+case "$GLIBC_VER" in 2.[0-9]*) [ "$gm" -lt 34 ] 2>/dev/null && NVIM_REPO=neovim/neovim-releases ;; esac
+[ "$USE_PM_NVIM" = 0 ] && lookup nvim "Neovim" gh_latest "$NVIM_REPO"
 # Installed terminal apps on macOS: their own update feeds (brew's casks can lag a release by days)
 [ "$USE_GHOSTTY" = 1 ] && [ -d /Applications/Ghostty.app ] && lookup ghostty_app "Ghostty" lk_appcast https://release.files.ghostty.org/appcast.xml
 [ "$USE_ITERM" = 1 ] && [ -d /Applications/iTerm.app ] && lookup iterm_app "iTerm2" lk_appcast https://iterm2.com/appcasts/final_modern.xml
@@ -1183,7 +1188,8 @@ if [ "$(id -u)" -ne 0 ] && [ -d "$HOME/.npm" ] && [ -n "$(find "$HOME/.npm" ! -u
   sys_plan "~/.npm" "has files owned by root (from an earlier sudo npm): sudo chown them back to you"
 fi
 [ "$OLD_TS_LINK" = 1 ] && sys_plan "old link" "rm /usr/local/bin/tree-sitter (points into one user's ~/.cargo)"
-[ "$NEED_NVIM" = 1 ]     && user_plan "Neovim" "$(change "$NVIM_CUR" "$NVIM_LATEST" "~/.local/opt/nvim")"
+if [ "$NVIM_REPO" = neovim/neovim ]; then NVIM_WHERE="~/.local/opt/nvim"; else NVIM_WHERE="~/.local/opt/nvim (build for glibc $GLIBC_VER)"; fi
+[ "$NEED_NVIM" = 1 ]     && user_plan "Neovim" "$(change "$NVIM_CUR" "$NVIM_LATEST" "$NVIM_WHERE")"
 [ "$NEED_NODE" = 1 ]     && user_plan "Node.js (LTS)" "$(change "$NODE_CUR" "$NODE_LATEST" "~/.local/opt/node")"
 [ "$NEED_TS" = 1 ]       && user_plan "tree-sitter CLI" "$(change "$TS_CUR" "$TS_LATEST" "~/.local/opt/tree-sitter-cli")"
 [ "$NEED_UV" = 1 ]       && user_plan "uv" "$(change "$UV_CUR" "$UV_LATEST" "~/.local/bin")"
@@ -1686,12 +1692,20 @@ job_nvim() {
   if [ "$NEED_NVIM" = 1 ]; then
     step "Installing Neovim ${NVIM_LATEST:-latest} ($NVIM_ARCH) in ~/.local/opt/nvim"
     if [ -n "$NVIM_LATEST" ]; then u="download/$NVIM_LATEST"; else u="latest/download"; fi
-    fetch "https://github.com/neovim/neovim/releases/$u/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
+    fetch "https://github.com/$NVIM_REPO/releases/$u/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
     rm -rf "$LOCAL_OPT/nvim" && mkdir -p "$LOCAL_OPT/nvim"
     tar -C "$LOCAL_OPT/nvim" --strip-components=1 -xzf "$TMP/nvim.tar.gz"
     ln -sf "$LOCAL_OPT/nvim/bin/nvim" "$LOCAL_BIN/nvim"
     hash -r
-    nvim --version >/dev/null 2>&1 || die "nvim failed to run (glibc too old?). Try a newer OS release."
+    if ! nvim --version >/dev/null 2>&1 && [ "$NVIM_REPO" = neovim/neovim ]; then
+      # glibc not detected, or too old after all: the build for older glibc
+      note "the official build does not run here, using the one for older glibc (neovim-releases)"
+      fetch "https://github.com/neovim/neovim-releases/releases/latest/download/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
+      rm -rf "$LOCAL_OPT/nvim" && mkdir -p "$LOCAL_OPT/nvim"
+      tar -C "$LOCAL_OPT/nvim" --strip-components=1 -xzf "$TMP/nvim.tar.gz"
+      hash -r
+    fi
+    nvim --version >/dev/null 2>&1 || die "nvim failed to run here (see the log); try a newer OS release"
     v="$(nvim --version)"; v="${v%%$'\n'*}"
     if [ -n "$NVIM_CUR" ]; then did "Neovim ${v#NVIM } (was $NVIM_CUR)"; else did "Neovim ${v#NVIM }"; fi
   fi
@@ -2227,7 +2241,8 @@ if [ "$SETUP_SSH" = 1 ] && [ ! -e "$HOME/.tssh.conf" ] && [ ! -e "${XDG_CONFIG_H
 jobs_wait
 hash -r
 has nvim || die "Neovim is not installed"
-nvim_ok || warn "$(nvim --version 2>/dev/null | sed -n 1p) < 0.11, the config needs 0.11+"
+v="$(nvim --version 2>/dev/null | sed -n 1p)"
+[ -n "$v" ] && ! nvim_ok && warn "$v < 0.11, the config needs 0.11+"
 
 node_ok || warn "Node.js >= 18 not found, JS-based LSPs (pyright, ts_ls...) will fail"
 
