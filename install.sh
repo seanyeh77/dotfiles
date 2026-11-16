@@ -918,7 +918,8 @@ lk_claude() {
 # The official Linux build needs glibc 2.34+; on older systems (RHEL / Rocky 8: 2.28, Debian 11:
 # 2.31) use neovim/neovim-releases, the same Neovim built for glibc 2.17 (its tags can lag a few days)
 NVIM_REPO=neovim/neovim
-GLIBC_VER="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{ print $2 }')"; gm="${GLIBC_VER#2.}"; gm="${gm%%.*}"
+# (no GNU_LIBC_VERSION on musl or macOS: getconf fails there, which must not stop set -e)
+GLIBC_VER="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{ print $2 }' || true)"; gm="${GLIBC_VER#2.}"; gm="${gm%%.*}"
 case "$GLIBC_VER" in 2.[0-9]*) [ "$gm" -lt 34 ] 2>/dev/null && NVIM_REPO=neovim/neovim-releases ;; esac
 [ "$USE_PM_NVIM" = 0 ] && lookup nvim "Neovim" gh_latest "$NVIM_REPO"
 # Installed terminal apps on macOS: their own update feeds (brew's casks can lag a release by days)

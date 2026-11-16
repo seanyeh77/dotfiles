@@ -12,7 +12,8 @@ sleep 2
 check "prefix"      "$("${T[@]}" show -gv prefix)"      "C-a"
 check "prefix2"     "$("${T[@]}" show -gv prefix2)"     "None"
 check "mouse"       "$("${T[@]}" show -gv mouse)"       "on"
-check "mode-keys"   "$("${T[@]}" show -gv mode-keys)"   "vi"
+# a window option: tmux before 3.0 only finds it with -w
+check "mode-keys"   "$("${T[@]}" show -gwv mode-keys)"  "vi"
 case "$("${T[@]}" show -gv status-style)" in *"bg=#181825"*) s=catppuccin ;; *) s="$("${T[@]}" show -gv status-style)" ;; esac
 check "status bar colours" "$s" "catppuccin"
 keys="$("${T[@]}" list-keys -T prefix)"
