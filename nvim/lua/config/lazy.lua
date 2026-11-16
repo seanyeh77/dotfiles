@@ -70,6 +70,9 @@ require("lazy").setup({
   install = { colorscheme = { "catppuccin", "habamax" } },
   checker = { enabled = true, notify = false }, -- check for plugin updates in the background
   performance = {
+    -- The installer runs several headless nvim at once (Mason, parsers); sharing the Lua bytecode
+    -- cache they could leave a broken entry (require() then returned `true`). Off for those runs.
+    cache = { enabled = vim.env.DOTFILES_HEADLESS_INSTALL ~= "1" },
     rtp = {
       disabled_plugins = { "gzip", "tarPlugin", "tohtml", "tutor", "zipPlugin" },
     },

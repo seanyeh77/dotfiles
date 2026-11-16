@@ -38,8 +38,16 @@ function M.collect()
   -- the parsers too. Try once more from scratch; failing that, go on without the server list.
   local ok, mlsp = pcall(require, "mason-lspconfig")
   if not ok or type(mlsp) ~= "table" then
+    -- load it straight from its file, past any module cache
     package.loaded["mason-lspconfig"] = nil
-    ok, mlsp = pcall(require, "mason-lspconfig")
+    local file = vim.api.nvim_get_runtime_file("lua/mason-lspconfig/init.lua", false)[1]
+    local chunk = file and loadfile(file)
+    if chunk then
+      ok, mlsp = pcall(chunk, "mason-lspconfig")
+      if ok and type(mlsp) == "table" then
+        package.loaded["mason-lspconfig"] = mlsp
+      end
+    end
   end
   if not ok or type(mlsp) ~= "table" then
     out("!! mason-lspconfig did not load (" .. tostring(mlsp) .. "): LSP servers skipped this time")
