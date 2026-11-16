@@ -34,19 +34,33 @@ function M.collect()
   end
   -- Record the servers LazyVim passes to mason-lspconfig (exactly what it would install)
   lazy.load({ plugins = { "mason-lspconfig.nvim" } })
-  local mlsp = require("mason-lspconfig")
+  -- Seen in CI (macOS): require() handed back `true` instead of the module, and the error stopped
+  -- the parsers too. Try once more from scratch; failing that, go on without the server list.
+  local ok, mlsp = pcall(require, "mason-lspconfig")
+  if not ok or type(mlsp) ~= "table" then
+    package.loaded["mason-lspconfig"] = nil
+    ok, mlsp = pcall(require, "mason-lspconfig")
+  end
+  if not ok or type(mlsp) ~= "table" then
+    out("!! mason-lspconfig did not load (" .. tostring(mlsp) .. "): LSP servers skipped this time")
+    mlsp = nil
+  end
   local servers = {}
-  local setup = mlsp.setup
-  mlsp.setup = function(o)
-    o = o or {}
-    servers = vim.deepcopy(o.ensure_installed or {})
-    if vim.env.DOTFILES_HEADLESS_INSTALL == "1" then
-      o.ensure_installed = {} -- install them ourselves, so only one installer runs
+  local setup = mlsp and mlsp.setup
+  if mlsp then
+    mlsp.setup = function(o)
+      o = o or {}
+      servers = vim.deepcopy(o.ensure_installed or {})
+      if vim.env.DOTFILES_HEADLESS_INSTALL == "1" then
+        o.ensure_installed = {} -- install them ourselves, so only one installer runs
+      end
+      return setup(o)
     end
-    return setup(o)
   end
   lazy.load({ plugins = { "mason.nvim", "nvim-lspconfig", "nvim-treesitter" } })
-  mlsp.setup = setup
+  if mlsp then
+    mlsp.setup = setup
+  end
 
   -- lspconfig server name -> Mason package name. Seen once in CI: the mappings module came back as
   -- `true` instead of a table, and the whole install stopped. Try the public API too, and fall back
