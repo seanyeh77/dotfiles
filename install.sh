@@ -672,7 +672,8 @@ export GIT_TERMINAL_PROMPT=0
 # Python is not here: each user gets their own from uv (below).
 case "$PM" in
   brew)    OS_REQ=(git tmux ripgrep:rg fd neovim:nvim node)
-           OS_OPT=(tree-sitter-cli:tree-sitter lazygit fzf imagemagick:magick ghostscript:gs)
+           # iproute2mac: `ip a`, `ip route`, `ip neigh` as on Linux (over ifconfig / route / netstat)
+           OS_OPT=(tree-sitter-cli:tree-sitter lazygit fzf imagemagick:magick ghostscript:gs iproute2mac:ip)
            [ "$SETUP_SSH" = 1 ] && OS_OPT+=(trzsz-go:trzsz trzsz-ssh:tssh tsshd) ;;
   apt-get) OS_REQ=(git curl unzip tar gzip xz-utils:xz findutils:find tmux ripgrep:rg build-essential)
            if [ "$IS_TERMUX" = 1 ]; then

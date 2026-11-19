@@ -30,6 +30,12 @@ done
 # GitHub CLI
 if command -v gh >/dev/null 2>&1 && gh --version >/dev/null 2>&1; then r=found; else r=missing; fi
 check "gh on PATH" "$r" "found"
+# macOS: `ip` from iproute2mac, as on Linux
+if [ "$(uname)" = Darwin ]; then
+  if ip a 2>/dev/null | grep -q 'inet '; then r=works; else r=missing; fi
+  check "ip a (iproute2mac)" "$r" "works"
+fi
+
 # fzf, and its shell integration from env.sh (Ctrl-R history widget) in an interactive bash and zsh
 if command -v fzf >/dev/null 2>&1 && fzf --bash >/dev/null 2>&1; then r=found; else r=missing; fi
 check "fzf on PATH (0.48+)" "$r" "found"
