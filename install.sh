@@ -1525,7 +1525,9 @@ fi
 if [ "$NEED_DOCKER_GROUP" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   me="$(id -un)"
   getent group docker >/dev/null 2>&1 || sudo groupadd docker >/dev/null 2>&1 || true
-  if { has usermod && sudo usermod -aG docker "$me"; } || { has addgroup && sudo addgroup "$me" docker; }; then
+  # Not `has usermod`: it is in /usr/sbin, outside a user's PATH on Debian, but in sudo's
+  # secure_path. usermod (most), addgroup (Alpine / BusyBox), gpasswd (the rest)
+  if sudo usermod -aG docker "$me" || sudo addgroup "$me" docker || sudo gpasswd -a "$me" docker; then
     sys_did "docker group: added $me (log out and back in, or run newgrp docker)"
     DOCKER_RELOGIN=1
   else failed "docker group (sudo usermod -aG docker $me)"; fi
@@ -1819,7 +1821,7 @@ job_gh() {
   local v="${GH_LATEST#v}" d="gh_${GH_LATEST#v}_linux_$ARCH"
   if fetch_once "https://github.com/cli/cli/releases/download/$GH_LATEST/$d.tar.gz" "$TMP/gh.tgz" \
      && tar -C "$TMP" -xzf "$TMP/gh.tgz" "$d/bin/gh" && mv -f "$TMP/$d/bin/gh" "$LOCAL_BIN/gh"; then
-    if [ -n "$GH_CUR" ]; then did "GitHub CLI $GH_LATEST (was $GH_CUR)"; else did "GitHub CLI $GH_LATEST (sign in: gh auth login)"; fi
+    if [ -n "$GH_CUR" ]; then did "GitHub CLI $GH_LATEST (was $GH_CUR)"; else did "GitHub CLI $GH_LATEST"; fi  # signing in: offered at the end, else under Next
   else
     failed "GitHub CLI ($v)"
   fi
