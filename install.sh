@@ -645,7 +645,9 @@ if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then CH="$CH $S_DOT terminal 
 [ "$SETUP_SSH" = 1 ] && CH="$CH $S_DOT SSH tools"
 [ "$CLAUDE_NTFY" = 1 ] && CH="$CH $S_DOT ntfy"
 [ "$INSTALL_GH" = 1 ] && CH="$CH $S_DOT gh"
-if [ "$SAVED_ANSWERS" = 1 ]; then CH="$CH  ${D}(saved; DOTFILES_ASK=1 to change)${N}"; fi
+# How to get the checklist back, also after a first run (it is replaced by this line)
+if [ "$SAVED_ANSWERS" = 1 ]; then CH="$CH  ${D}(saved; DOTFILES_ASK=1 to change)${N}"
+else CH="$CH  ${D}(saved for next time; DOTFILES_ASK=1 asks again)${N}"; fi
 log "Choices: $CH"
 [ -n "${NEW_PLUGINS:-}" ] && log "New in the Claude plugin list: $NEW_PLUGINS"
 
