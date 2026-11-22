@@ -611,13 +611,29 @@ ask_line() { # ask_line PROMPT DEFAULT [hidden]: one line from the terminal, DEF
 if [ "$CLAUDE_NTFY" = 1 ] && ! grep -qs '^NTFY_TOPIC=..*' "$NTFY_CONF"; then
   n_url="${NTFY_URL:-}"; n_topic="${NTFY_TOPIC:-}"; n_token="${NTFY_TOKEN:-}"
   if [ -z "$n_topic" ] && [ "$HAS_TTY" = 1 ]; then
+    # The checklist was skipped (choices saved by an earlier run, e.g. one stopped at these
+    # questions): say how to get it back before asking anything
+    if [ "$SAVED_ANSWERS" = 1 ]; then
+      printf '\n  %sUsing the choices saved earlier (DOTFILES_ASK=1 shows the checklist again)%s\n' "$D" "$N" >/dev/tty
+    fi
     printf '\n  %sntfy notifications%s %s(saved only on this machine, in %s)%s\n' "$B" "$N" "$D" "${NTFY_CONF/#$HOME/~}" "$N" >/dev/tty
+    printf '  %sEnter keeps the value in [ ]; topic "none" turns notifications off%s\n' "$D" "$N" >/dev/tty
     n_url="$(ask_line "Server:" "${n_url:-https://ntfy.sh}")"
     # Anyone who knows a topic on a public server can read it: suggest one nobody can guess
     n_topic="$(ask_line "Topic (subscribe to it in the ntfy app):" "claude-$(od -An -tx1 -N6 /dev/urandom | tr -d ' \n')")"
-    n_token="$(ask_line "Access token (Enter if none):" "" hidden)"
+    case "$n_topic" in
+      none|NONE|-|off)
+        n_topic=""; CLAUDE_NTFY=0
+        # remember it: off in the saved choices, so these questions do not come back
+        if [ -f "$ANSWERS" ]; then
+          sed 's/^CLAUDE_NTFY=.*/CLAUDE_NTFY=0/' "$ANSWERS" > "$ANSWERS.tmp" && mv -f "$ANSWERS.tmp" "$ANSWERS"
+        fi ;;
+      *) n_token="$(ask_line "Access token (Enter if none):" "" hidden)" ;;
+    esac
   fi
-  if [ -n "$n_topic" ]; then
+  if [ "$CLAUDE_NTFY" = 0 ]; then
+    : # turned off just now
+  elif [ -n "$n_topic" ]; then
     mkdir -p "$STATE_DIR"
     ( umask 077; printf 'NTFY_URL=%s\nNTFY_TOPIC=%s\nNTFY_TOKEN=%s\n' "${n_url:-https://ntfy.sh}" "$n_topic" "$n_token" > "$NTFY_CONF" )
     NTFY_NEW=1
