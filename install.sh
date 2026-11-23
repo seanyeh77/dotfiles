@@ -1133,7 +1133,9 @@ if [ "$DOTFILES_DIR" != "$(cd "$OLD_DOTFILES" 2>/dev/null && pwd -P || echo "$OL
       # Removed only when nothing of yours is in it: no changed, untracked or ignored files (whatever
       # status.showUntrackedFiles says), no commits that are not pushed on any branch, no stash.
       # nvim/lazy-lock.json used to be rewritten by plugin updates: not a change of yours
-      if [ -z "$(og status --porcelain --untracked-files=all --ignored 2>/dev/null | grep -v ' nvim/lazy-lock.json$' || true)" ] \
+      # (a failing git status, e.g. a damaged index, counts as changes, like the checks below)
+      st="$(og status --porcelain --untracked-files=all --ignored 2>/dev/null || echo x)"
+      if [ -z "$(printf '%s\n' "$st" | grep -v ' nvim/lazy-lock.json$' || true)" ] \
          && [ -z "$(og log --oneline '@{u}..HEAD' 2>/dev/null || echo x)" ] \
          && [ -z "$(og log --oneline --branches --not --remotes 2>/dev/null || echo x)" ] \
          && [ -z "$(og stash list 2>/dev/null || echo x)" ]; then RM_OLD=1
