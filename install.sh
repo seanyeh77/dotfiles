@@ -1982,7 +1982,8 @@ job_terminal() {
     IFS='|' read -r name app cur latest url <<< "$t"
     step "Updating $name to $latest"
     rm -rf "$TMP/app-$name"; mkdir -p "$TMP/app-$name"
-    if fetch_once "$url" "$TMP/app-$name.dl" && unpack_app "$url" "$TMP/app-$name.dl" "$TMP/app-$name" \
+    # retried like other downloads (in a subshell with a quiet die: a failure is reported below)
+    if ( die() { exit 1; }; fetch "$url" "$TMP/app-$name.dl" ) && unpack_app "$url" "$TMP/app-$name.dl" "$TMP/app-$name" \
        && [ -d "$TMP/app-$name/${app##*/}" ]; then
       # Move the old app aside first, so a failed move puts it back
       if mv "$app" "$TMP/app-$name.old" && { mv "$TMP/app-$name/${app##*/}" "$app" || { mv "$TMP/app-$name.old" "$app"; false; }; }; then
