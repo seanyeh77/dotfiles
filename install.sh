@@ -805,6 +805,9 @@ if { [ "$PM" = dnf ] || [ "$PM" = yum ]; } && [ ${#MISS_OPT[@]} -gt 0 ]; then
   MISS_OPT=(${keep[@]+"${keep[@]}"})
 fi
 NEED_BREW=0; [ "$PM" = brew ] && ! has brew && NEED_BREW=1
+# Homebrew's installer needs sudo: with NO_SUDO=1 say so now, before any question
+[ "$NEED_BREW" = 1 ] && [ "${NO_SUDO:-0}" = 1 ] \
+  && die "Homebrew is not installed and needs sudo to install, but NO_SUDO=1 is set (install Homebrew first, or run without NO_SUDO=1)"
 NEED_OS=0; [ ${#MISS_REQ[@]} -gt 0 ] || [ ${#MISS_OPT[@]} -gt 0 ] || [ "$NEED_BREW" = 1 ] && NEED_OS=1
 # Homebrew: refresh its index in the background now (it takes half a minute), while the plan is
 # read; the OS packages step waits for it. It changes no installed formula.
@@ -1504,11 +1507,10 @@ pm_add() { # pm_add PACKAGE...
 if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   if [ "$NEED_BREW" = 1 ]; then
     step "Installing Homebrew"
-    fetch https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh "$TMP/brew-install.sh"
     # Its installer needs sudo, but with NONINTERACTIVE=1 it cannot ask: sudo -v asks first (and
     # caches it). Without Homebrew nothing else can be installed here, so a failure stops the run.
-    [ "${NO_SUDO:-0}" != 1 ] || die "Homebrew needs sudo to install, and NO_SUDO=1 is set"
     on_screen sudo -v || die "Homebrew needs an admin account and its password (sudo) to install"
+    fetch https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh "$TMP/brew-install.sh"
     on_screen env NONINTERACTIVE=1 bash "$TMP/brew-install.sh" || die "the Homebrew installer failed (see above)"
     for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$b" ] && eval "$("$b" shellenv)"; done
     sys_did "Homebrew"
