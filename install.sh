@@ -1618,8 +1618,12 @@ if [ "$NPM_FIX" = 1 ]; then
     failed "npm cache ~/.npm is owned by root, so npm-based LSP servers fail (run: sudo chown -R $(id -un) ~/.npm)"
   fi
 fi
-if [ "$OLD_TS_LINK" = 1 ] && [ "$SUDO_OK" = 1 ] && [ "$BREW_SUDO_OFF" = 0 ]; then
-  on_screen sudo rm -f /usr/local/bin/tree-sitter && sys_did "removed old link /usr/local/bin/tree-sitter"
+if [ "$OLD_TS_LINK" = 1 ]; then
+  if [ "$SUDO_OK" = 1 ] && [ "$BREW_SUDO_OFF" = 0 ] && on_screen sudo rm -f /usr/local/bin/tree-sitter; then
+    sys_did "removed old link /usr/local/bin/tree-sitter"
+  else
+    failed "old link /usr/local/bin/tree-sitter points into one user's ~/.cargo (run: sudo rm /usr/local/bin/tree-sitter)"
+  fi
 fi
 
 # Debian/Ubuntu ship fd as fdfind
