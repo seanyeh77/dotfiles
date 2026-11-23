@@ -68,10 +68,10 @@ TB="${ESC}[1m"; TD="${ESC}[2m"; TG="${ESC}[32m"; TY="${ESC}[33m"; TR="${ESC}[31m
 if [ "$UI" = 1 ]; then B="$TB"; D="$TD"; G="$TG"; Y="$TY"; R="$TR"; C="$TC"; N="$TN"
 else B=""; D=""; G=""; Y=""; R=""; C=""; N=""; fi
 if [ "$UTF" = 1 ]; then
-  S_OK="✓"; S_BAD="✗"; S_WARN="!"; S_NEW="+"; S_UP="↑"; S_TO="→"; S_PTR="›"; S_DOT="·"; S_ON="◉"; S_OFF="○"
+  S_OK="✓"; S_BAD="✗"; S_WARN="!"; S_NEW="+"; S_UP="↑"; S_TO="→"; S_PTR="›"; S_DOT="·"; S_ON="◉"; S_OFF="○"; S_ELL="…"
   SPIN_FRAMES=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
 else
-  S_OK="ok"; S_BAD="xx"; S_WARN="!"; S_NEW="+"; S_UP="^"; S_TO="->"; S_PTR=">"; S_DOT="-"; S_ON="[x]"; S_OFF="[ ]"
+  S_OK="ok"; S_BAD="xx"; S_WARN="!"; S_NEW="+"; S_UP="^"; S_TO="->"; S_PTR=">"; S_DOT="-"; S_ON="[x]"; S_OFF="[ ]"; S_ELL="..."
   SPIN_FRAMES=("|" "/" "-" "\\")
 fi
 COLS=80
@@ -173,7 +173,6 @@ job() { # job NAME LABEL FUNCTION
     trap - EXIT INT TERM
     SPIN_PID=""; STEP_LABEL=""; JD="$jd"
     did()       { printf 'did\t%s\n' "$*" >> "$JD.res"; }
-    sys_did()   { printf 'sys\t%s\n' "$*" >> "$JD.res"; }
     failed()    { printf 'failed\t%s\n' "$*" >> "$JD.res"; printf '!! not installed: %s\n' "$*"; }
     note()      { printf 'note\t%s\n' "$*" >> "$JD.res"; printf '   %s\n' "$*"; }
     warn()      { printf 'warn\t%s\n' "$*" >> "$JD.res"; printf '!! %s\n' "$*"; }
@@ -241,7 +240,6 @@ jobs_wait() {
     while IFS="$(printf '\t')" read -r kind msg; do
       case "$kind" in
         did) DONE+=("$msg") ;;
-        sys) SYS_DONE+=("$msg") ;;
         failed) FAILED+=("$msg")
                 [ "$UI" = 1 ] && printf '    %snot installed: %s%s\n' "$Y" "$msg" "$N" >&3 ;;
         warn) [ "$UI" = 1 ] && printf '    %s%s%s\n' "$Y" "$msg" "$N" >&3 ;;
@@ -257,7 +255,7 @@ jobs_wait() {
   return 0
 }
 
-trap 'spin_stop; printf "%s[?25h" "$ESC" >&3; stty echo </dev/tty 2>/dev/null || true' EXIT
+trap 'spin_stop; [ "$UI" = 1 ] && printf "%s[?25h" "$ESC" >&3; stty echo </dev/tty 2>/dev/null || true' EXIT
 trap 'exit 130' INT TERM
 
 # Each user gets their own Neovim, Node.js and tree-sitter in ~/.local, so users on the same
@@ -337,8 +335,8 @@ if [ "$UI" = 1 ]; then
 fi
 printf '==> OS: %s (%s)  Arch: %s  WSL: %s\n' "$OS_NAME" "$PM" "$ARCH" "$IS_WSL"
 
-# The official nvim / node / tree-sitter / uv / Python builds need glibc: use the package
-# manager's on macOS, musl (Alpine) and Termux
+# The official nvim / node / tree-sitter builds need glibc (and lazygit, gh, fzf come from brew /
+# apk / pkg there anyway): use the package manager's on macOS, musl (Alpine) and Termux
 USE_PM=0
 if [ "$PM" = brew ] || [ "$PM" = apk ] || [ "$IS_TERMUX" = 1 ]; then USE_PM=1; fi
 
@@ -578,7 +576,7 @@ if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "
   [ "$FONT_OFFER" = 1 ] && INSTALL_FONT="$(m_value font)"
   SETUP_SSH="$(m_value ssh)"
   INSTALL_GH="$(m_value gh)"
-  SAVED_ANSWERS=0
+  SAVED_ANSWERS=0; ASKED=1
   mkdir -p "$STATE_DIR"
   printf 'ANSWERS_VERSION=2\nINSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nCLAUDE_PLUGINS_KNOWN="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\nSETUP_SSH=%s\nCLAUDE_NTFY=%s\nINSTALL_GH=%s\n' \
     "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "$ALL_PLUGINS" "${INSTALL_DOCKER:-0}" "${SETUP_TERMINAL:-1}" "${INSTALL_FONT:-1}" \
@@ -663,7 +661,7 @@ if [ "$USE_ITERM" = 1 ] || [ "$USE_GHOSTTY" = 1 ]; then CH="$CH $S_DOT terminal 
 [ "$INSTALL_GH" = 1 ] && CH="$CH $S_DOT gh"
 # How to get the checklist back, also after a first run (it is replaced by this line)
 if [ "$SAVED_ANSWERS" = 1 ]; then CH="$CH  ${D}(saved; DOTFILES_ASK=1 to change)${N}"
-else CH="$CH  ${D}(saved for next time; DOTFILES_ASK=1 asks again)${N}"; fi
+elif [ "${ASKED:-0}" = 1 ]; then CH="$CH  ${D}(saved for next time; DOTFILES_ASK=1 asks again)${N}"; fi
 log "Choices: $CH"
 [ -n "${NEW_PLUGINS:-}" ] && log "New in the Claude plugin list: $NEW_PLUGINS"
 
@@ -833,7 +831,7 @@ DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 OH_MY_TMUX="$DATA_HOME/oh-my-tmux"
 git_update() { # git_update DIR: "OLD NEW COUNT" when the upstream is ahead, empty otherwise
   local d="$1" n
-  GIT_TERMINAL_PROMPT=0 timeout_cmd 60 git -c safe.directory="$d" -C "$d" fetch -q 2>/dev/null || return 0
+  timeout_cmd 60 git -c safe.directory="$d" -C "$d" fetch -q 2>/dev/null || return 0
   n="$(git -c safe.directory="$d" -C "$d" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0)"
   [ "$n" -gt 0 ] 2>/dev/null || return 0
   printf '%s %s %s' "$(git -c safe.directory="$d" -C "$d" rev-parse --short HEAD)" \
@@ -872,7 +870,10 @@ gitg() { env -u GIT_CONFIG_GLOBAL git "$@"; }
 if has git && git config --global --includes --get-regexp '^url\..*\.insteadof$' >/dev/null 2>&1; then
   : > "$TMP/gitconfig"
   git config --global --includes --list 2>/dev/null | { grep -iv '^url\.' || true; } | while IFS= read -r kv; do
-    git config -f "$TMP/gitconfig" --add "${kv%%=*}" "${kv#*=}" 2>/dev/null || true
+    case "$kv" in # a key without "=" is a boolean written without a value ([http] sslVerify)
+      *=*) git config -f "$TMP/gitconfig" --add "${kv%%=*}" "${kv#*=}" 2>/dev/null || true ;;
+      *)   git config -f "$TMP/gitconfig" --add "$kv" true 2>/dev/null || true ;;
+    esac
   done
   export GIT_CONFIG_GLOBAL="$TMP/gitconfig"
 fi
@@ -947,12 +948,16 @@ case "$GLIBC_VER" in 2.[0-9]*) [ "$gm" -lt 34 ] 2>/dev/null && NVIM_REPO=neovim/
 [ "$USE_PM" = 0 ] && lookup node "Node.js LTS" lk_node
 if [ "$USE_PM" = 0 ]; then
   lookup ts "tree-sitter CLI" gh_latest tree-sitter/tree-sitter
-  lookup uv "uv" gh_latest astral-sh/uv
   lookup lazygit "lazygit" gh_latest jesseduffield/lazygit
   [ "$INSTALL_GH" = 1 ] && lookup gh "GitHub CLI" gh_latest cli/cli
   lookup fzf "fzf" gh_latest junegunn/fzf
+fi
+# uv (and Python through it) comes from uv's own installer everywhere but Termux, macOS and Alpine too
+if [ "$IS_TERMUX" = 0 ]; then
+  lookup uv "uv" gh_latest astral-sh/uv
   if [ -z "${PYTHON_VERSION:-}" ] && has uv; then lookup python "Python" lk_python; fi
 fi
+[ "$want_font" = 1 ] && [ "$PM" != brew ] && lookup font "Nerd Font" gh_latest ryanoasis/nerd-fonts
 lk_dotfiles() { # the commit this install would use
   if [ -n "$DOTFILES_DIR" ]; then git -c safe.directory="$DOTFILES_DIR" -C "$DOTFILES_DIR" rev-parse HEAD 2>/dev/null
   elif has git; then timeout_cmd 30 git ls-remote "$DOTFILES_REPO" HEAD 2>/dev/null | awk '{print $1}'; fi
@@ -1323,7 +1328,7 @@ if [ "$want_font" = 1 ] && ! font_installed; then
   if [ "$PM" = brew ]; then
     user_plan "JetBrainsMono Nerd Font" "new, brew install --cask (icons in nvim)"
   else
-    FONT_VER="$(gh_latest ryanoasis/nerd-fonts)"
+    FONT_VER="$(lookup_result font)"
     user_plan "JetBrainsMono Nerd Font" "new ${FONT_VER:-latest}, ~/.local/share/fonts (icons in nvim)"
   fi
 fi
@@ -1362,7 +1367,7 @@ plan_rows() {
   done
   for i in "${!NA[@]}"; do
     room=$((COLS - wn - wv - 10)); [ "$room" -gt 0 ] || room=0
-    rest="${RE[$i]}"; [ ${#rest} -gt "$room" ] && rest="${rest:0:$((room > 1 ? room - 1 : 0))}…"
+    rest="${RE[$i]}"; [ ${#rest} -gt "$room" ] && rest="${rest:0:$((room > 1 ? room - 1 : 0))}$S_ELL"
     printf '    %s %-*s  %s%-*s%s  %s%s%s\n' "${SY[$i]}" "$wn" "${NA[$i]}" "$B" "$wv" "${VE[$i]}" "$N" "$D" "$rest" "$N" >&3
   done
 }
@@ -1666,10 +1671,10 @@ if [ "$NEED_OMT" = 0 ]; then
     if [ -n "$OMT_UPD" ]; then set -- $OMT_UPD; did "Oh my tmux! $1 -> $2"; fi
   else warn "could not update Oh my tmux!"; fi
 else
-  git clone -q https://github.com/gpakosz/.tmux "$OH_MY_TMUX"
-  did "Oh my tmux! $(git -C "$OH_MY_TMUX" rev-parse --short HEAD)"
+  if git clone -q https://github.com/gpakosz/.tmux "$OH_MY_TMUX"; then did "Oh my tmux! $(git -C "$OH_MY_TMUX" rev-parse --short HEAD)"
+  else failed "Oh my tmux! (git clone https://github.com/gpakosz/.tmux)"; fi
 fi
-link "$OH_MY_TMUX/.tmux.conf" "$HOME/.tmux.conf"
+[ -f "$OH_MY_TMUX/.tmux.conf" ] && link "$OH_MY_TMUX/.tmux.conf" "$HOME/.tmux.conf"
 
 # Load env.sh (PATH for ~/.local/bin and Mason, sshk, ...) from the shell rc files, once.
 # The line older installs added (pointing into ~/dotfiles) is replaced.
@@ -1716,8 +1721,10 @@ unpack_opt() {
   f="$TMP/$(basename "$1")"
   case "$1" in *.xz) z=J ;; esac
   fetch "$1" "$f"
-  rm -rf "$2" && mkdir -p "$2"
-  tar -C "$2" --strip-components=1 -x${z}f "$f"
+  # next to it first: a failed unpack (disk full, no xz) keeps the working install
+  rm -rf "$2.new" && mkdir -p "$2.new"
+  tar -C "$2.new" --strip-components=1 -x${z}f "$f"
+  rm -rf "$2" && mv "$2.new" "$2"
 }
 job_nvim() {
   # ---------- Neovim ----------
@@ -2005,7 +2012,8 @@ job_parsers() {
     # npm package in ~/.local/opt/tree-sitter-cli; works with any Node.js, no global install
     step "Installing tree-sitter CLI ${TS_LATEST:-latest} in ~/.local/opt/tree-sitter-cli"
     npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" "tree-sitter-cli@${TS_LATEST#v}" >/dev/null 2>&1 \
-      || npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" tree-sitter-cli@latest >/dev/null
+      || npm install --silent --prefix "$LOCAL_OPT/tree-sitter-cli" tree-sitter-cli@latest >/dev/null \
+      || true # checked below (ts_works), which reports it
     ln -sf "$LOCAL_OPT/tree-sitter-cli/node_modules/.bin/tree-sitter" "$LOCAL_BIN/tree-sitter"
     hash -r
     # The prebuilt binary needs glibc 2.39. On older systems (Debian 12, RHEL 9, Ubuntu 22.04)
@@ -2023,16 +2031,19 @@ job_parsers() {
         [ "${m:-0}" -ge 85 ] && CARGO="$(command -v cargo)"
       fi
       if [ -z "$CARGO" ]; then
-        fetch https://sh.rustup.rs "$TMP/rustup.sh"
-        # SKIP_PATH_CHECK: install next to the OS's Rust, which stays as it is
-        RUSTUP_INIT_SKIP_PATH_CHECK=yes sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null
-        did "Rust (rustup, in ~/.cargo)"
-        CARGO="$HOME/.cargo/bin/cargo"
+        # SKIP_PATH_CHECK: install next to the OS's Rust, which stays as it is. (fetch in a subshell:
+        # its die would end this job, skipping the fallback below and the parsers)
+        if ( fetch https://sh.rustup.rs "$TMP/rustup.sh" ) \
+           && RUSTUP_INIT_SKIP_PATH_CHECK=yes sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null; then
+          did "Rust (rustup, in ~/.cargo)"
+          CARGO="$HOME/.cargo/bin/cargo"
+        else note "could not install Rust with rustup"; fi
       fi
       ts_args=(install --locked --force tree-sitter-cli)
       [ -n "$TS_LATEST" ] && ts_args+=(--version "${TS_LATEST#v}")
       ts_built=0
-      if "$CARGO" "${ts_args[@]}"; then ts_built=1
+      if [ -z "$CARGO" ]; then :
+      elif "$CARGO" "${ts_args[@]}"; then ts_built=1
       else
         # rustc panics when it cannot start its threads, e.g. under a shared server's per-user
         # process limit: once more, one crate and one codegen thread at a time
@@ -2157,7 +2168,7 @@ job_claude_plugins() {
   #   hooks.Stop / hooks.Notification: the ntfy hook (claude-ntfy.js), added or removed
   if [ "$NEED_CLAUDE_ATTR" = 1 ] || [ "$NEED_CLAUDE_PUSH" = 1 ] || [ "$NEED_NTFY_HOOK" = 1 ] || [ "$PM" = apk ]; then
     mkdir -p "$HOME/.claude"
-    NTFY_CMD=""; [ "$NEED_NTFY_HOOK" = 1 ] && [ "$CLAUDE_NTFY" = 1 ] && NTFY_CMD="\"$(command -v node)\" \"$NTFY_HOOK\""
+    NTFY_CMD=""; [ "$NEED_NTFY_HOOK" = 1 ] && [ "$CLAUDE_NTFY" = 1 ] && NTFY_CMD="\"$(command -v node || echo node)\" \"$NTFY_HOOK\""
     if CLAUDE_SETTINGS="$CLAUDE_SETTINGS" PUSH="$NEED_CLAUDE_PUSH" NTFY="$([ "$NEED_NTFY_HOOK" = 1 ] && echo "$CLAUDE_NTFY")" \
        NTFY_CMD="$NTFY_CMD" MUSL="$([ "$PM" = apk ] && echo 1 || echo 0)" node -e '
       const fs = require("fs"), f = process.env.CLAUDE_SETTINGS;
@@ -2275,13 +2286,15 @@ if with_timeout 900 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless "+Lazy! sync
   fi
   lock_commits "$LAZY_LOCK" > "$TMP/lock.after" || true
   n="$(wc -l < "$TMP/lock.after" | tr -d ' ')"
-  m=0; [ -s "$TMP/lock.before" ] && m="$(LC_ALL=C join "$TMP/lock.before" "$TMP/lock.after" 2>/dev/null | awk '$2 != $3' | wc -l | tr -d ' ' || echo 0)"
-  note "$n plugins, $m updated"
+  # changed and new plugins, "NAME COMMIT" lines before and after (awk: BusyBox has no join)
+  : > "$TMP/plugins.done"
   if [ -s "$TMP/lock.before" ]; then
-    LC_ALL=C join "$TMP/lock.before" "$TMP/lock.after" | awk '$2 != $3 {print "nvim plugin " $1 " " $2 " -> " $3}' > "$TMP/plugins.done"
-    LC_ALL=C join -v 2 "$TMP/lock.before" "$TMP/lock.after" | awk '{print "nvim plugin " $1 " new " $2}' >> "$TMP/plugins.done"
-    while IFS= read -r l; do did "$l"; done < "$TMP/plugins.done"
+    awk 'NR == FNR {b[$1] = $2; next} !($1 in b) {print "nvim plugin " $1 " new " $2; next}
+         b[$1] != $2 {print "nvim plugin " $1 " " b[$1] " -> " $2}' "$TMP/lock.before" "$TMP/lock.after" > "$TMP/plugins.done" || true
   fi
+  m="$(grep -c ' -> ' "$TMP/plugins.done" || true)"
+  note "$n plugins, ${m:-0} updated"
+  while IFS= read -r l; do did "$l"; done < "$TMP/plugins.done"
 else
   tr -d '\r' < "$TMP/lazy.log" >> "$INSTALL_LOG" || true
   [ "$UI" = 1 ] || tail -n 20 "$TMP/lazy.log" | tr -d '\r' >&2
