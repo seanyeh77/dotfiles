@@ -794,6 +794,16 @@ pkg_installed_version() { # pkg_installed_version PACKAGE
 MISS_REQ=(); MISS_OPT=()
 for s in "${OS_REQ[@]}"; do spec_installed "$s" || MISS_REQ+=("${s%%:*}"); done
 for s in "${OS_OPT[@]}"; do spec_installed "$s" || MISS_OPT+=("${s%%:*}"); done
+# dnf / yum read the repository data directly: an optional package no enabled repository has
+# (ripgrep, fd-find, ... are in EPEL on RHEL / Rocky) is left out, instead of being planned, failing
+# and asking for the sudo password again on every run
+if { [ "$PM" = dnf ] || [ "$PM" = yum ]; } && [ ${#MISS_OPT[@]} -gt 0 ]; then
+  keep=()
+  for p in "${MISS_OPT[@]}"; do
+    if [ -n "$(pkg_version "$p")" ]; then keep+=("$p"); else log "optional package $p: in no enabled repository (EPEL?), skipped"; fi
+  done
+  MISS_OPT=(${keep[@]+"${keep[@]}"})
+fi
 NEED_BREW=0; [ "$PM" = brew ] && ! has brew && NEED_BREW=1
 NEED_OS=0; [ ${#MISS_REQ[@]} -gt 0 ] || [ ${#MISS_OPT[@]} -gt 0 ] || [ "$NEED_BREW" = 1 ] && NEED_OS=1
 # Homebrew: refresh its index in the background now (it takes half a minute), while the plan is
