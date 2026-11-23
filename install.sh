@@ -1215,7 +1215,7 @@ if [ "$PM" = brew ] && has brew && [ $((${#MISS_REQ[@]} + ${#MISS_OPT[@]})) -gt 
   BREW_INFO="$(brew info ${MISS_REQ[@]+"${MISS_REQ[@]}"} ${MISS_OPT[@]+"${MISS_OPT[@]}"} 2>/dev/null || true)"
 fi
 if [ "$NEED_OS" = 1 ]; then
-  [ "$NEED_BREW" = 1 ] && sys_plan "Homebrew" "new, in /opt/homebrew (or /usr/local), asks for sudo once"
+  [ "$NEED_BREW" = 1 ] && sys_plan "Homebrew" "new, in /opt/homebrew (or /usr/local), asks for your password (sudo) once"
   if [ "$INDEX_FRESH" = 0 ]; then
     case "$PM" in
       apt-get) sys_plan "package index" "apt-get update (refresh only, nothing upgraded)" ;;
@@ -1505,7 +1505,11 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   if [ "$NEED_BREW" = 1 ]; then
     step "Installing Homebrew"
     fetch https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh "$TMP/brew-install.sh"
-    on_screen env NONINTERACTIVE=1 bash "$TMP/brew-install.sh" # asks for the sudo password
+    # Its installer needs sudo, but with NONINTERACTIVE=1 it cannot ask: sudo -v asks first (and
+    # caches it). Without Homebrew nothing else can be installed here, so a failure stops the run.
+    [ "${NO_SUDO:-0}" != 1 ] || die "Homebrew needs sudo to install, and NO_SUDO=1 is set"
+    on_screen sudo -v || die "Homebrew needs an admin account and its password (sudo) to install"
+    on_screen env NONINTERACTIVE=1 bash "$TMP/brew-install.sh" || die "the Homebrew installer failed (see above)"
     for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$b" ] && eval "$("$b" shellenv)"; done
     sys_did "Homebrew"
   fi
