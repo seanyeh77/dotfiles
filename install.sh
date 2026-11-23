@@ -822,7 +822,8 @@ INDEX_FRESH=0
 if [ "$NEED_OS" = 1 ] && [ "$(id -u)" -eq 0 ]; then
   case "$PM" in
     apt-get) with_timeout 180 apt-get update -qq </dev/null >/dev/null 2>&1 && INDEX_FRESH=1 ;;
-    pacman)  with_timeout 180 pacman -Sy --noconfirm </dev/null >/dev/null 2>&1 && INDEX_FRESH=1 ;;
+    # (not pacman: on Arch a refreshed index without the upgrade is a partial upgrade, unsupported;
+    # it is refreshed with the upgrade when installing, after the question)
     zypper)  with_timeout 180 zypper --non-interactive -q refresh </dev/null >/dev/null 2>&1 && INDEX_FRESH=1 ;;
     apk)     with_timeout 180 apk update -q </dev/null >/dev/null 2>&1 && INDEX_FRESH=1 ;;
   esac # (failed: refreshed again with the others, in the plan)
@@ -1209,7 +1210,7 @@ change()    { # change CURRENT LATEST [WHERE]: "new X" or "X -> Y"
 case "$PM" in
   brew)    PM_CMD="brew install" ;;
   apt-get) PM_CMD="apt-get install" ;;
-  pacman)  PM_CMD="pacman -S" ;;
+  pacman)  PM_CMD="pacman -Syu" ;;
   apk)     PM_CMD="apk add" ;;
   *)       PM_CMD="$PM install" ;;
 esac
@@ -1222,7 +1223,7 @@ if [ "$NEED_OS" = 1 ]; then
   if [ "$INDEX_FRESH" = 0 ]; then
     case "$PM" in
       apt-get) sys_plan "package index" "apt-get update (refresh only, nothing upgraded)" ;;
-      pacman)  sys_plan "package index" "pacman -Sy (refresh only, nothing upgraded)" ;;
+      pacman)  sys_plan "system upgrade" "pacman -Syu: Arch supports installing only on an up-to-date system" ;;
       zypper)  sys_plan "package index" "zypper refresh (refresh only, nothing upgraded)" ;;
       apk)     sys_plan "package index" "apk update (refresh only, nothing upgraded)" ;;
       brew)    [ "$NEED_BREW" = 0 ] && sys_plan "package index" "brew update (refreshes Homebrew itself, nothing upgraded)" ;;
@@ -1445,7 +1446,11 @@ elif [ "$UI" = 1 ]; then
     printf '  %sYou%s %s%s only %s, in ~, no sudo%s\n' "$B" "$N" "$D" "$S_DOT" "$(id -un)" "$N" >&3
     plan_rows "${USER_PLAN[@]}"
   fi
-  printf '\n  %sInstalled OS packages are kept as they are; your own tools follow the latest release.%s\n' "$D" "$N" >&3
+  if [ "$PM" = pacman ] && [ ${#SYS_PLAN[@]} -gt 0 ]; then
+    printf '\n  %sOn Arch, installing a package upgrades the system first; your own tools follow the latest release.%s\n' "$D" "$N" >&3
+  else
+    printf '\n  %sInstalled OS packages are kept as they are; your own tools follow the latest release.%s\n' "$D" "$N" >&3
+  fi
 else
   # plain output (CI, a pipe): one block, the same format as always
   log "To install or update:"
@@ -1457,7 +1462,8 @@ else
     echo "   Only you ($(id -un)), in ~, no sudo:"
     print_rows "${USER_PLAN[@]}"
   fi
-  echo "   Installed OS packages are left as they are; everything else is kept at the latest release."
+  if [ "$PM" = pacman ] && [ ${#SYS_PLAN[@]} -gt 0 ]; then echo "   On Arch, installing a package upgrades the system first; everything else is kept at the latest release."
+  else echo "   Installed OS packages are left as they are; everything else is kept at the latest release."; fi
 fi
 # One confirmation (a key press) on a terminal; ASSUME_YES=1 skips it
 if [ $((${#SYS_PLAN[@]} + ${#USER_PLAN[@]})) -gt 0 ] && [ "$HAS_TTY" = 1 ] && [ "${ASSUME_YES:-0}" != 1 ]; then
@@ -1499,7 +1505,7 @@ pm_add() { # pm_add PACKAGE...
     # needs a libgcc that is not there yet), the newest one that can is installed instead of nothing
     dnf)     sudo dnf install -y --nobest "$@" ;;
     yum)     sudo yum install -y "$@" ;;
-    pacman)  sudo pacman -S --noconfirm --needed "$@" ;;
+    pacman)  sudo pacman -Syu --noconfirm --needed "$@" ;; # Arch: no partial upgrades (-Sy without -u)
     zypper)  sudo zypper --non-interactive install "$@" ;;
     apk)     sudo apk add "$@" ;;
   esac
@@ -1520,7 +1526,7 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
     step "Updating the package index"
     case "$PM" in
       apt-get) sudo apt-get update || true ;;
-      pacman)  sudo pacman -Sy --noconfirm || true ;; # (a missing package is reported when installing)
+      pacman)  : ;; # refreshed together with the upgrade, by pacman -Syu when installing
       zypper)  sudo zypper --non-interactive refresh || true ;;
       apk)     sudo apk update || true ;;
       brew)    # started in the background before the plan (quietly: it lists every new formula)
