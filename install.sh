@@ -1694,7 +1694,11 @@ if [ "$OS" != Darwin ] || [ "$USE_GHOSTTY" = 1 ]; then
     fi
   done
 fi
-if [ "$USE_ITERM" = 1 ] && ! cmp -s "$SRC/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"; then NEED_ITERM=1; fi
+# A newer profile in the repo: only the profile file is updated (ITERM_UPD), the default profile
+# you may have picked since is left alone
+ITERM_UPD=0
+if [ "$USE_ITERM" = 1 ] && [ "$NEED_ITERM" = 0 ] && [ -f "$ITERM_PROFILES/dotfiles.json" ] \
+   && ! cmp -s "$SRC/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json"; then ITERM_UPD=1; fi
 if [ "$DF_CUR" != "${SRC_VER:0:7}" ] || [ "$CHANGED" -gt 0 ]; then
   if [ -n "$DF_CUR" ]; then did "dotfiles $DF_CUR -> ${SRC_VER:0:7} ($CHANGED files changed)"
   else did "dotfiles ${SRC_VER:0:7} (in ~/.config/nvim, ~/.tmux.conf.local, ~/.config/dotfiles)"; fi
@@ -2007,6 +2011,9 @@ job_terminal() {
     defaults write com.googlecode.iterm2 "Default Bookmark Guid" -string "$ITERM_GUID"
     defaults write com.googlecode.iterm2 AllowClipboardAccess -bool true
     did "iTerm2 profile 'Dotfiles (Catppuccin Mocha)' (default; restart iTerm2 to use it)"
+  elif [ "${ITERM_UPD:-0}" = 1 ]; then
+    step "Updating the iTerm2 profile"
+    cp "$SRC/iterm2/dotfiles.json" "$ITERM_PROFILES/dotfiles.json" && did "iTerm2 profile 'Dotfiles (Catppuccin Mocha)' updated"
   fi
   if [ "$NEED_ITERM_THEME" = 1 ]; then
     # 5 = Minimal (0 Light, 1 Dark, 4 Automatic, 6 Compact)
@@ -2315,7 +2322,7 @@ if [ "$SETUP_SSH" = 1 ] && { [ "$OS" = Darwin ] || [ -d "$HOME/Downloads" ]; } \
   SSH_TODO=1 # job_ssh's own test: ~/.trzsz.conf or a tssh config still to write
 fi
 [ "$SSH_TODO" = 1 ] && job ssh "SSH tools" job_ssh
-{ [ "$NEED_FONT" = 1 ] || [ "$NEED_GHOSTTY" = 1 ] || [ "$NEED_ITERM" = 1 ] || [ "$NEED_ITERM_THEME" = 1 ] \
+{ [ "$NEED_FONT" = 1 ] || [ "$NEED_GHOSTTY" = 1 ] || [ "$NEED_ITERM" = 1 ] || [ "$ITERM_UPD" = 1 ] || [ "$NEED_ITERM_THEME" = 1 ] \
   || [ "$NEED_TERM_UPD" = 1 ]; } && job terminal "Terminal setup" job_terminal
 [ "$INSTALL_CLAUDE" = 1 ] && [ "$NEED_CLAUDE" = 1 ] && job claude "Claude Code" job_claude
 jobs_wait
@@ -2387,12 +2394,11 @@ if [ "$RM_OLD" = 1 ]; then
   if [ "$(gitg config --global core.hooksPath 2>/dev/null || true)" = "$OLD_DOTFILES/git/hooks" ]; then
     gitg config --global core.hooksPath "$GIT_HOOKS"
   fi
-  # Links an older install made into it and this run did not replace (e.g. Ghostty's config with
-  # Ghostty unticked now) become copies, so they do not point at nothing afterwards
-  for f in "$CONFIG_HOME/nvim" "$CONFIG_HOME/ghostty/config" "$HOME/.tmux.conf.local"; do
-    t="$(readlink "$f" 2>/dev/null || true)"
-    case "$t" in "$OLD_DOTFILES"/*) [ -e "$t" ] && rm -f "$f" && cp -R "$t" "$f" ;; esac
-  done
+  # A link an older install made into it that this run did not replace (only Ghostty's config can
+  # be left, with Ghostty unticked now: nvim and tmux are always replaced) becomes a copy, so it does
+  # not point at nothing afterwards
+  f="$CONFIG_HOME/ghostty/config"; t="$(readlink "$f" 2>/dev/null || true)"
+  case "$t" in "$OLD_DOTFILES"/*) [ -e "$t" ] && rm -f "$f" && cp "$t" "$f" ;; esac
   rm -rf "${HOME:?}/dotfiles" && did "removed the old ~/dotfiles (no longer used)"
 fi
 
