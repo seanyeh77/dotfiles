@@ -1622,9 +1622,17 @@ mkdir -p "$STATE_DIR"
 CHANGED=0
 # install_file SRC DST KEY: copy SRC to DST. A DST you edited since the last install (it differs
 # from what was installed) is saved as DST.bak.<time> first.
+# drop_link DST: DST is a symlink. One an older install made (into ~/dotfiles) is removed; any other
+# (stow, your own dotfiles repo) is set aside like a file of yours, never just deleted
+drop_link() {
+  case "$(readlink "$1" 2>/dev/null || true)" in
+    "$OLD_DOTFILES"/*) rm -f "${1:?}" ;;
+    *) mv "$1" "$1.bak.$STAMP"; warn "moved your link $1 aside (${1##*/}.bak.$STAMP)" ;;
+  esac
+}
 install_file() {
   local src="$1" dst="$2" pris="$PRISTINE/$3"
-  if [ -L "$dst" ]; then rm -f "${dst:?}"   # a link from an older install
+  if [ -L "$dst" ]; then drop_link "$dst"
   elif [ -e "$dst" ] && ! cmp -s "$src" "$dst"; then
     if [ ! -f "$pris" ] || ! cmp -s "$pris" "$dst"; then
       cp -p "$dst" "$dst.bak.$STAMP"; warn "kept your version of $dst as ${dst##*/}.bak.$STAMP"
@@ -1641,7 +1649,7 @@ install_file() {
 install_tree() {
   local src="$1" dst="$2" key="$3" f k keep; shift 3
   [ -d "$src" ] || die "missing $src in the downloaded repo" # before anything in DST is removed
-  if [ -L "$dst" ]; then rm -f "${dst:?}"
+  if [ -L "$dst" ]; then drop_link "$dst"
   elif [ -d "$dst" ] && [ ! -d "$PRISTINE/$key" ]; then
     # a config that did not come from this installer: set it aside
     mv "$dst" "$dst.bak.$STAMP"; warn "moved your $dst to ${dst##*/}.bak.$STAMP"
@@ -1688,10 +1696,12 @@ if [ "$DF_CUR" != "${SRC_VER:0:7}" ] || [ "$CHANGED" -gt 0 ]; then
 fi
 printf '%s\n' "$SRC_VER" > "$STATE_DIR/version"
 
-link() { # link SRC DST: a symlink; an existing file is set aside first
+link() { # link SRC DST: a symlink; an existing file, or a link elsewhere, is set aside first
   local src="$1" dst="$2"
   mkdir -p "$(dirname "$dst")"
-  if [ -e "$dst" ] && [ ! -L "$dst" ]; then mv "$dst" "$dst.bak.$STAMP"; fi
+  if { [ -e "$dst" ] || [ -L "$dst" ]; } && [ "$(readlink "$dst" 2>/dev/null || true)" != "$src" ]; then
+    mv "$dst" "$dst.bak.$STAMP"; warn "moved your $dst aside (${dst##*/}.bak.$STAMP)"
+  fi
   ln -sfn "$src" "$dst"
 }
 
@@ -2371,6 +2381,12 @@ if [ "$RM_OLD" = 1 ]; then
   if [ "$(gitg config --global core.hooksPath 2>/dev/null || true)" = "$OLD_DOTFILES/git/hooks" ]; then
     gitg config --global core.hooksPath "$GIT_HOOKS"
   fi
+  # Links an older install made into it and this run did not replace (e.g. Ghostty's config with
+  # Ghostty unticked now) become copies, so they do not point at nothing afterwards
+  for f in "$CONFIG_HOME/nvim" "$CONFIG_HOME/ghostty/config" "$HOME/.tmux.conf.local"; do
+    t="$(readlink "$f" 2>/dev/null || true)"
+    case "$t" in "$OLD_DOTFILES"/*) [ -e "$t" ] && rm -f "$f" && cp -R "$t" "$f" ;; esac
+  done
   rm -rf "${HOME:?}/dotfiles" && did "removed the old ~/dotfiles (no longer used)"
 fi
 
