@@ -94,7 +94,8 @@ sshk() {
 
 # fzf shell integration (interactive bash / zsh): Ctrl-R searches the command history, Ctrl-T
 # inserts files, Alt-C (Option-C on macOS) changes into a folder; `**<Tab>` completes paths, e.g.
-# `nvim **<Tab>`. Needs fzf 0.48 or newer (install.sh puts one in ~/.local/bin). Skipped when your
+# `nvim **<Tab>`. Needs fzf 0.48 or newer (install.sh installs one: in ~/.local/bin on Linux, from the package
+# manager on macOS, Alpine and Termux). Skipped when your
 # own setup already loaded it, or with DOTFILES_FZF=0. fd, when present, lists the files (it skips
 # .gitignore'd ones and is faster); the colours are Catppuccin Mocha. Your own FZF_* settings win.
 case "$-" in *i*)

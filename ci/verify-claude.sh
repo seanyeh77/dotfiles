@@ -49,11 +49,11 @@ node -e 'const s = require(process.env.HOME + "/.claude/settings.json");
   process.exit(has("Stop") && has("Notification") ? 0 : 1)'
 check "settings: ntfy hooks" $?
 t="$(mktemp -d)"
-printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/args"\n' "$t" > "$t/curl"; chmod +x "$t/curl"
+printf '#!/bin/sh\n{ printf "%%s\\n" "$@"; cat; } > "%s/args"\n' "$t" > "$t/curl"; chmod +x "$t/curl" # arguments, then the -K config from stdin
 echo '{"hook_event_name":"Notification","message":"Claude needs your permission to use Bash","cwd":"/tmp"}' \
   | NTFY_CURL="$t/curl" node "${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles/claude-ntfy.js"
 sleep 1
-grep -q '"title":"Claude needs you' "$t/args" 2>/dev/null && grep -q "https://ntfy.sh" "$t/args"
+grep -q 'title.*Claude needs you' "$t/args" 2>/dev/null && grep -q "https://ntfy.sh" "$t/args"
 check "ntfy hook builds the message" $?
 rm -rf "$t"
 # The global commit-msg hook removes Claude co-author lines and keeps other co-authors

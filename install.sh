@@ -89,6 +89,7 @@ term_cols
 
 SPIN_PID=""; STEP_LABEL=""; STEP_T0=0; STEP_BAD=0; STEP_MSGS=()
 # A background loop redraws "⠋ label  12s  <last line of the log>" until spin_stop
+TILDE="~" # for ${PATH_VAR/#$HOME/$TILDE}: a literal ~ there is expanded (bash 4.3+) or keeps its \ (3.2)
 # last_line FILE: its last line without colours or the installer's own ==> / !! lines (spinner text)
 last_line() { tail -n 1 "$1" 2>/dev/null | tr -d '\r' | sed "s/${ESC}\[[0-9;?]*[A-Za-z]//g; /^==> /d; /^!! /d" || true; }
 spin_start() {
@@ -190,7 +191,7 @@ job() { # job NAME LABEL FUNCTION
   [ "${SERIAL:-0}" = 1 ] && jobs_wait
   return 0
 }
-jobs_draw() { # one line per job; FINAL=1 draws the result instead of the spinner
+jobs_draw() { # one line per job: its result once it is done (its .rc file exists), else a spinner
   local i jd lab rc m d el w
   [ $((J_TICK % 5)) = 0 ] && term_cols
   for i in "${!J_NAMES[@]}"; do
@@ -482,7 +483,7 @@ if [ -z "${CLAUDE_NTFY:-}" ] && grep -qs '^NTFY_TOPIC=..*' "$STATE_DIR/ntfy"; th
 M_ID=(); M_LABEL=(); M_DESC=(); M_KIND=(); M_ON=()
 m_add() { M_ID+=("$1"); M_LABEL+=("$2"); M_DESC+=("$3"); M_KIND+=("$4"); M_ON+=("$5"); }
 m_draw() { # m_draw CURSOR
-  local i on mark lab desc w pre parent_on=1 h f
+  local i on mark lab desc w lw pre parent_on=1 h f
   # header and footer cut to the window too: a wrapped line would break the redraw
   h="(Neovim, tmux, LSP servers and git tools always)"; h="${h:0:$((COLS > 27 ? COLS - 27 : 0))}"
   printf '  %sChoose what to install%s  %s%s%s%s[K\n%s[K\n' "$TB" "$TN" "$TD" "$h" "$TN" "$ESC" "$ESC" >/dev/tty
@@ -498,8 +499,10 @@ m_draw() { # m_draw CURSOR
       lab="    $lab"
     fi
     [ "$i" = "$1" ] && st="$st$TB"
-    lab="$(printf '%-33s' "$lab")"
-    w=$((COLS - 38 - ${#S_ON})); [ "$w" -gt 0 ] || w=0 # ([x] is 3 columns without UTF-8)
+    # label column: 33, narrower on a narrow screen; [x] is 3 columns without UTF-8
+    lw=$((COLS - 5 - ${#S_ON})); [ "$lw" -lt 33 ] || lw=33; [ "$lw" -gt 0 ] || lw=1
+    lab="$(printf "%-${lw}s" "${lab:0:$lw}")"
+    w=$((COLS - lw - 5 - ${#S_ON})); [ "$w" -gt 0 ] || w=0
     printf ' %s %s %s%s%s %s%s%s%s[K\n' "$pre" "$mark" "$st" "$lab" "$TN" "$TD" "${desc:0:$w}" "$TN" "$ESC" >/dev/tty
   done
   if [ "$UTF" = 1 ]; then f="↑↓ move"; else f="Up/Down move"; fi
@@ -619,7 +622,7 @@ if [ "$CLAUDE_NTFY" = 1 ] && ! grep -qs '^NTFY_TOPIC=..*' "$NTFY_CONF"; then
     if [ "$SAVED_ANSWERS" = 1 ]; then
       printf '\n  %sUsing the choices saved earlier (DOTFILES_ASK=1 shows the checklist again)%s\n' "$D" "$N" >/dev/tty
     fi
-    printf '\n  %sntfy notifications%s %s(saved only on this machine, in %s)%s\n' "$B" "$N" "$D" "${NTFY_CONF/#$HOME/\~}" "$N" >/dev/tty
+    printf '\n  %sntfy notifications%s %s(saved only on this machine, in %s)%s\n' "$B" "$N" "$D" "${NTFY_CONF/#$HOME/$TILDE}" "$N" >/dev/tty
     printf '  %sEnter keeps the value in [ ]; topic "none" turns notifications off%s\n' "$D" "$N" >/dev/tty
     n_url="$(ask_line "Server:" "${n_url:-https://ntfy.sh}")"
     # Anyone who knows a topic on a public server can read it: suggest one nobody can guess
@@ -788,12 +791,11 @@ fi
 INDEX_FRESH=0
 if [ "$NEED_OS" = 1 ] && [ "$(id -u)" -eq 0 ]; then
   case "$PM" in
-    apt-get) with_timeout 180 apt-get update -qq </dev/null >/dev/null 2>&1 || true ;;
-    pacman)  with_timeout 180 pacman -Sy --noconfirm </dev/null >/dev/null 2>&1 || true ;;
-    zypper)  with_timeout 180 zypper --non-interactive -q refresh </dev/null >/dev/null 2>&1 || true ;;
-    apk)     with_timeout 180 apk update -q </dev/null >/dev/null 2>&1 || true ;;
-  esac
-  INDEX_FRESH=1
+    apt-get) with_timeout 180 apt-get update -qq </dev/null >/dev/null 2>&1 && INDEX_FRESH=1 ;;
+    pacman)  with_timeout 180 pacman -Sy --noconfirm </dev/null >/dev/null 2>&1 && INDEX_FRESH=1 ;;
+    zypper)  with_timeout 180 zypper --non-interactive -q refresh </dev/null >/dev/null 2>&1 && INDEX_FRESH=1 ;;
+    apk)     with_timeout 180 apk update -q </dev/null >/dev/null 2>&1 && INDEX_FRESH=1 ;;
+  esac # (failed: refreshed again with the others, in the plan)
 fi
 # Older versions of this installer linked /usr/local/bin/tree-sitter to one user's ~/.cargo,
 # which other users cannot run; that link is removed (a system change, so it is in the plan)
@@ -909,11 +911,11 @@ if [ -n "$SPACE_TMP" ] && [ "$SPACE_TMP" -lt 300 ]; then
 fi
 [ -n "$SPACE_HOME" ] && [ "$SPACE_HOME" -lt 2048 ] && warn "only $SPACE_HOME MB free in ~: a first install needs about 2 GB"
 LOOKUP="$TMP/lookup"; mkdir -p "$LOOKUP"
-L_PIDS=(); L_NAMES=(); L_LABELS=()
+L_PIDS=(); L_LABELS=()
 lookup() { # lookup NAME LABEL FUNCTION...
   local name="$1" label="$2"; shift 2
   ( "$@" > "$LOOKUP/$name" 2>/dev/null || true ) &
-  L_PIDS+=("$!"); L_NAMES+=("$name"); L_LABELS+=("$label")
+  L_PIDS+=("$!"); L_LABELS+=("$label")
 }
 lookup_result() { cat "$LOOKUP/$1" 2>/dev/null || true; }
 lk_node() {
@@ -1471,9 +1473,9 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
     step "Updating the package index"
     case "$PM" in
       apt-get) sudo apt-get update || true ;;
-      pacman)  sudo pacman -Sy --noconfirm ;;
+      pacman)  sudo pacman -Sy --noconfirm || true ;; # (a missing package is reported when installing)
       zypper)  sudo zypper --non-interactive refresh || true ;;
-      apk)     sudo apk update ;;
+      apk)     sudo apk update || true ;;
       brew)    # started in the background before the plan (quietly: it lists every new formula)
                if [ -n "$BREW_UPD_PID" ]; then wait "$BREW_UPD_PID" 2>/dev/null || warn "brew update failed, installing with the current package list"
                else brew update --quiet >/dev/null 2>&1 || warn "brew update failed, installing with the current package list"; fi ;;
@@ -1506,6 +1508,9 @@ elif [ "$NEED_OS" = 1 ]; then
 fi
 
 # ---------- Docker (asked at the start) ----------
+if { [ "$NEED_DOCKER" = 1 ] || [ "$NEED_DOCKER_GROUP" = 1 ]; } && [ "$SUDO_OK" != 1 ]; then
+  failed "Docker (needs sudo, which was not given)"
+fi
 if [ "$NEED_DOCKER" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   step "Installing Docker"
   docker_ok=0
@@ -1865,8 +1870,9 @@ job_uv() {
   uv_installer() {
     local url=https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh
     [ -n "$UV_LATEST" ] && url="https://github.com/astral-sh/uv/releases/download/$UV_LATEST/uv-installer.sh"
-    # in a subshell: fetch dies after its retries, which would end the whole job here
-    ( fetch "$url" "$TMP/uv-installer.sh" ) &&
+    # in a subshell with a quiet die: fetch dies after its retries, which would end the whole job
+    # here and add its own line to the summary
+    ( die() { exit 1; }; fetch "$url" "$TMP/uv-installer.sh" ) &&
       env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$LOCAL_BIN" sh "$TMP/uv-installer.sh" --quiet && [ -x "$LOCAL_BIN/uv" ]
   }
   uv_now() { "$LOCAL_BIN/uv" --version 2>/dev/null | awk '{print $2}'; }
@@ -1900,6 +1906,8 @@ job_uv() {
     else
       cat "$TMP/uv-python.log" >&2; failed "Python ${PY_LATEST:-latest} (uv)"
     fi
+  elif [ "$NEED_PY" = 1 ]; then
+    failed "Python (needs uv)"
   fi
 
 }
@@ -2040,7 +2048,7 @@ job_parsers() {
       if [ -z "$CARGO" ]; then
         # SKIP_PATH_CHECK: install next to the OS's Rust, which stays as it is. (fetch in a subshell:
         # its die would end this job, skipping the fallback below and the parsers)
-        if ( fetch https://sh.rustup.rs "$TMP/rustup.sh" ) \
+        if ( die() { exit 1; }; fetch https://sh.rustup.rs "$TMP/rustup.sh" ) \
            && RUSTUP_INIT_SKIP_PATH_CHECK=yes sh "$TMP/rustup.sh" -y --profile minimal --no-modify-path >/dev/null; then
           did "Rust (rustup, in ~/.cargo)"
           CARGO="$HOME/.cargo/bin/cargo"
@@ -2221,7 +2229,7 @@ job_claude_plugins() {
       curl -fsS -m 15 -H "Content-Type: application/json" ${NTFY_TOKEN:+-H "Authorization: Bearer $NTFY_TOKEN"} \
         -d "{\"topic\":\"$NTFY_TOPIC\",\"title\":\"dotfiles\",\"message\":\"ntfy works on $(hostname | cut -d. -f1)\",\"tags\":[\"tada\"]}" \
         "${NTFY_URL%/}" >/dev/null ) && note "ntfy: test message sent to $(sed -n 's/^NTFY_TOPIC=//p' "$NTFY_CONF")" \
-      || failed "ntfy test message (check NTFY_URL / NTFY_TOPIC / NTFY_TOKEN in ${NTFY_CONF/#$HOME/\~})"
+      || failed "ntfy test message (check NTFY_URL / NTFY_TOPIC / NTFY_TOKEN in ${NTFY_CONF/#$HOME/$TILDE})"
   fi
   if [ "$NEED_GIT_HOOK" = 1 ]; then
     if gitg config --global core.hooksPath "$GIT_HOOKS"; then did "git commit-msg hook (core.hooksPath $GIT_HOOKS)"
@@ -2260,7 +2268,9 @@ SSH_TODO=0
 for i in "${!TZ_TOOLS[@]}"; do [ "${TZ_NEED[$i]}" = 1 ] && SSH_TODO=1; done
 [ "$NEED_SSHCFG" = 1 ] && SSH_TODO=1
 if [ "$SETUP_SSH" = 1 ] && { [ "$OS" = Darwin ] || [ -d "$HOME/Downloads" ]; } \
-   && [ ! -e "$HOME/.tssh.conf" ] && [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/tssh/tssh.conf" ]; then SSH_TODO=1; fi # (job_ssh's own test)
+   && { [ ! -e "$HOME/.trzsz.conf" ] || { [ ! -e "$HOME/.tssh.conf" ] && [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/tssh/tssh.conf" ]; }; }; then
+  SSH_TODO=1 # job_ssh's own test: ~/.trzsz.conf or a tssh config still to write
+fi
 [ "$SSH_TODO" = 1 ] && job ssh "SSH tools" job_ssh
 { [ "$NEED_FONT" = 1 ] || [ "$NEED_GHOSTTY" = 1 ] || [ "$NEED_ITERM" = 1 ] || [ "$NEED_ITERM_THEME" = 1 ] \
   || [ "$NEED_TERM_UPD" = 1 ]; } && job terminal "Terminal setup" job_terminal
@@ -2369,7 +2379,7 @@ NEXT=()
 if [ ${#FAILED[@]} -gt 0 ]; then
   SPACE_END="$(free_mb "$HOME")"
   # install.log is new each run (Mason's own log keeps old runs, so it is not read)
-  if grep -qsi 'ENOSPC\|No space left on device' "$INSTALL_LOG" || [ "${SPACE_END:-999}" -lt 200 ]; then
+  if grep -qsi 'ENOSPC\|No space left on device' "$INSTALL_LOG" "$TMP"/job.*.log || [ "${SPACE_END:-999}" -lt 200 ]; then
     FAILED+=("(the disk is full: ${SPACE_END:-?} MB free in ~)")
     NEXT+=("Free some space or grow the disk (df -h ~; du -sh ~/.cache ~/.local/share/* | sort -h), then run this again: the items under Not installed failed for lack of space")
   fi

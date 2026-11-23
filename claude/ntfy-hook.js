@@ -77,11 +77,18 @@ if (ev === "Notification") {
 }
 
 // JSON publishing (POST to the server root) keeps titles and text in UTF-8
+// The token and the text go to curl as a config on stdin (-K -), not as arguments, which other
+// users on a shared machine could read with ps while curl runs
 const body = JSON.stringify({ topic, ...msg });
-const args = ["-fsS", "-m", "15", "-H", "Content-Type: application/json", "-d", body];
+const conf = ['header = "Content-Type: application/json"', `data = ${JSON.stringify(body)}`];
 const token = get("NTFY_TOKEN");
-if (token) args.push("-H", `Authorization: Bearer ${token}`);
-args.push(get("NTFY_URL", "https://ntfy.sh").replace(/\/+$/, ""));
+if (token) conf.push(`header = ${JSON.stringify(`Authorization: Bearer ${token}`)}`);
+const url = get("NTFY_URL", "https://ntfy.sh").replace(/\/+$/, "");
 try {
-  cp.spawn(process.env.NTFY_CURL || "curl", args, { detached: true, stdio: "ignore" }).unref();
+  const c = cp.spawn(process.env.NTFY_CURL || "curl", ["-fsS", "-m", "15", "-K", "-", url],
+    { detached: true, stdio: ["pipe", "ignore", "ignore"] });
+  c.on("error", () => {});
+  c.stdin.on("error", () => {});
+  c.stdin.end(conf.join("\n") + "\n");
+  c.unref();
 } catch {}

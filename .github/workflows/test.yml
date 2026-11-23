@@ -119,7 +119,7 @@ jobs:
           - { image: "opensuse/tumbleweed" }
           - { image: "alpine:latest", experimental: true } # musl: some Mason binaries cannot run
     steps:
-      # checkout needs git, otherwise there is no .git and install.sh would try to clone again
+      # git: a real clone (.git), so install.sh can report the commit; bash: the later steps run in bash
       - name: bootstrap git
         shell: sh
         run: |
