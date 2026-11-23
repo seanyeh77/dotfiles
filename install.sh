@@ -45,7 +45,8 @@ DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/seanyeh77/dotfiles}"
 # DOTFILES_DIR=PATH installs from that checkout instead (it is kept), e.g. to try local changes.
 DOTFILES_DIR="${DOTFILES_DIR:-}"
 # its real path: "." or "~/dotfiles/" must still match ~/dotfiles below (which is otherwise removed)
-if [ -n "$DOTFILES_DIR" ]; then DOTFILES_DIR="$(cd "$DOTFILES_DIR" 2>/dev/null && pwd -P || echo "$DOTFILES_DIR")"; fi
+# (CDPATH= : with CDPATH set, cd prints the folder, which would end up in the value)
+if [ -n "$DOTFILES_DIR" ]; then DOTFILES_DIR="$(CDPATH='' cd -- "$DOTFILES_DIR" 2>/dev/null && pwd -P || echo "$DOTFILES_DIR")"; fi
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 STATE_DIR="$CONFIG_HOME/dotfiles"   # env.sh, git hooks, installed version, saved answers
 OLD_DOTFILES="$HOME/dotfiles"       # where older versions of this installer kept the repo
@@ -1129,9 +1130,13 @@ if [ "$DOTFILES_DIR" != "$(cd "$OLD_DOTFILES" 2>/dev/null && pwd -P || echo "$OL
   og() { git -c safe.directory="$OLD_DOTFILES" -C "$OLD_DOTFILES" "$@"; }
   case "$(og remote get-url origin 2>/dev/null || true)" in
     *seanyeh77/dotfiles*|"$DOTFILES_REPO"*)
+      # Removed only when nothing of yours is in it: no changed, untracked or ignored files (whatever
+      # status.showUntrackedFiles says), no commits that are not pushed on any branch, no stash.
       # nvim/lazy-lock.json used to be rewritten by plugin updates: not a change of yours
-      if [ -z "$(og status --porcelain 2>/dev/null | grep -v ' nvim/lazy-lock.json$' || true)" ] \
-         && [ -z "$(og log --oneline '@{u}..HEAD' 2>/dev/null || echo x)" ]; then RM_OLD=1
+      if [ -z "$(og status --porcelain --untracked-files=all --ignored 2>/dev/null | grep -v ' nvim/lazy-lock.json$' || true)" ] \
+         && [ -z "$(og log --oneline '@{u}..HEAD' 2>/dev/null || echo x)" ] \
+         && [ -z "$(og log --oneline --branches --not --remotes 2>/dev/null || echo x)" ] \
+         && [ -z "$(og stash list 2>/dev/null || echo x)" ]; then RM_OLD=1
       else warn "~/dotfiles has changes of yours, so it is kept; nothing uses it any more"; fi ;;
   esac
 fi
