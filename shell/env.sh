@@ -89,7 +89,7 @@ sshk() {
   if ! command ssh -o BatchMode=yes -o ConnectTimeout=5 -o IdentitiesOnly=yes -i "$_k" "$@" true >/dev/null 2>&1; then
     ssh-copy-id -i "$_k.pub" "$@" || return
   fi
-  dotfiles_ssh "$@"
+  ssh "$@" # the ssh alias above when it is set (tssh / trzsz), else plain OpenSSH
 }
 
 # fzf shell integration (interactive bash / zsh): Ctrl-R searches the command history, Ctrl-T

@@ -119,12 +119,12 @@ return {
     end,
   },
 
-  -- Treesitter: bash and gitcommit on top of the extras
+  -- Treesitter: gitcommit on top of LazyVim's parsers (bash and diff are already there) and the extras
   {
     "nvim-treesitter/nvim-treesitter",
     opts = function(_, opts)
       opts.ensure_installed = opts.ensure_installed or {}
-      vim.list_extend(opts.ensure_installed, { "bash", "gitcommit", "diff" })
+      vim.list_extend(opts.ensure_installed, { "gitcommit" })
       _G.DOTFILES.ts_langs = vim.deepcopy(opts.ensure_installed)
       -- During `install.sh`, the installer compiles parsers itself and waits for them. Without this,
       -- LazyVim would also start background builds that get killed when headless nvim exits.
