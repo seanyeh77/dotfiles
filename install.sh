@@ -355,7 +355,9 @@ elif [ "$PM" = brew ]; then
 elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
   if sudo -n true 2>/dev/null; then
     SUDO_OK=1 # sudo without a password (NOPASSWD, or a cached sudo)
-  elif [ "${USE_SUDO:-0}" = 1 ] || id -nG 2>/dev/null | tr ' ' '\n' | grep -qx -e wheel -e sudo -e admin; then
+  elif [ "${USE_SUDO:-0}" = 1 ] || id -nG 2>/dev/null | tr ' ' '\n' | grep -x -e wheel -e sudo -e admin >/dev/null; then
+    # (not grep -q: it stops reading at the first match, and with many directory groups the pipe
+    # then fails under pipefail)
     SUDO_OK=2 # ask for the password after the plan, only if there are system changes
   fi
   # Otherwise sudo is installed but this user is not an admin (a shared server or cluster):
@@ -585,9 +587,14 @@ if [ "$HAS_TTY" = 1 ] && [ "${TERM:-dumb}" != dumb ] && { [ "$OPEN" = 1 ] || [ "
   SETUP_SSH="$(m_value ssh)"
   INSTALL_GH="$(m_value gh)"
   SAVED_ANSWERS=0; ASKED=1
+  # Only what the checklist showed is saved: an option not offered now (no sudo for Docker, no
+  # iTerm2 / Ghostty yet, no font offer) stays unanswered, so the checklist asks once it is offered
+  sv_d=""; [ -n "$DOCKER_TODO" ] && [ "$DOCKER_BLOCKED" = 0 ] && sv_d="${INSTALL_DOCKER:-0}"
+  sv_t=""; [ -n "$TERM_OFFER" ] && sv_t="${SETUP_TERMINAL:-1}"
+  sv_f=""; [ "$FONT_OFFER" = 1 ] && sv_f="${INSTALL_FONT:-1}"
   mkdir -p "$STATE_DIR"
   printf 'ANSWERS_VERSION=2\nINSTALL_CLAUDE=%s\nCLAUDE_PLUGINS="%s"\nCLAUDE_PLUGINS_KNOWN="%s"\nINSTALL_DOCKER=%s\nSETUP_TERMINAL=%s\nINSTALL_FONT=%s\nSETUP_SSH=%s\nCLAUDE_NTFY=%s\nINSTALL_GH=%s\n' \
-    "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "$ALL_PLUGINS" "${INSTALL_DOCKER:-0}" "${SETUP_TERMINAL:-1}" "${INSTALL_FONT:-1}" \
+    "$INSTALL_CLAUDE" "$CLAUDE_PLUGINS" "$ALL_PLUGINS" "$sv_d" "$sv_t" "$sv_f" \
     "${SETUP_SSH:-1}" "${CLAUDE_NTFY:-1}" "${INSTALL_GH:-1}" > "$ANSWERS"
 fi
 # Defaults for anything still unset (no terminal: CI, cron)
@@ -2224,11 +2231,16 @@ job_claude_plugins() {
   fi
   if [ "${NTFY_NEW:-0}" = 1 ] && [ "$CLAUDE_NTFY" = 1 ]; then
     # One message now, so you can check that it arrives
+    # The topic and token go to curl as a config on stdin (-K -), not as arguments other users can
+    # see with ps. cq: quoted for curl's config (backslash and double quote escaped)
+    cq() { local v="${1//\\/\\\\}"; printf '"%s"' "${v//\"/\\\"}"; }
     # shellcheck disable=SC1090
     ( . "$NTFY_CONF"
-      curl -fsS -m 15 -H "Content-Type: application/json" ${NTFY_TOKEN:+-H "Authorization: Bearer $NTFY_TOKEN"} \
-        -d "{\"topic\":\"$NTFY_TOPIC\",\"title\":\"dotfiles\",\"message\":\"ntfy works on $(hostname | cut -d. -f1)\",\"tags\":[\"tada\"]}" \
-        "${NTFY_URL%/}" >/dev/null ) && note "ntfy: test message sent to $(sed -n 's/^NTFY_TOPIC=//p' "$NTFY_CONF")" \
+      body="{\"topic\":\"$NTFY_TOPIC\",\"title\":\"dotfiles\",\"message\":\"ntfy works on $(hostname | cut -d. -f1)\",\"tags\":[\"tada\"]}"
+      { printf 'header = %s\n' "$(cq "Content-Type: application/json")"
+        [ -n "${NTFY_TOKEN:-}" ] && printf 'header = %s\n' "$(cq "Authorization: Bearer $NTFY_TOKEN")"
+        printf 'data = %s\n' "$(cq "$body")"
+      } | curl -fsS -m 15 -K - "${NTFY_URL%/}" >/dev/null ) && note "ntfy: test message sent to $(sed -n 's/^NTFY_TOPIC=//p' "$NTFY_CONF")" \
       || failed "ntfy test message (check NTFY_URL / NTFY_TOPIC / NTFY_TOKEN in ${NTFY_CONF/#$HOME/$TILDE})"
   fi
   if [ "$NEED_GIT_HOOK" = 1 ]; then
