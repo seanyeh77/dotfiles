@@ -1492,7 +1492,9 @@ pm_add() { # pm_add PACKAGE...
     brew)    HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_UPGRADE=1 \
                HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install "$@" ;;
     apt-get) sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-upgrade "$@" ;;
-    dnf)     sudo dnf install -y "$@" ;;
+    # --nobest: when the newest build cannot be installed (a mirror that is mid-sync: gcc already
+    # needs a libgcc that is not there yet), the newest one that can is installed instead of nothing
+    dnf)     sudo dnf install -y --nobest "$@" ;;
     yum)     sudo yum install -y "$@" ;;
     pacman)  sudo pacman -S --noconfirm --needed "$@" ;;
     zypper)  sudo zypper --non-interactive install "$@" ;;
