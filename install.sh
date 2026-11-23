@@ -1223,7 +1223,6 @@ if [ "$NEED_OS" = 1 ]; then
   if [ "$INDEX_FRESH" = 0 ]; then
     case "$PM" in
       apt-get) sys_plan "package index" "apt-get update (refresh only, nothing upgraded)" ;;
-      pacman)  sys_plan "system upgrade" "pacman -Syu: Arch supports installing only on an up-to-date system" ;;
       zypper)  sys_plan "package index" "zypper refresh (refresh only, nothing upgraded)" ;;
       apk)     sys_plan "package index" "apk update (refresh only, nothing upgraded)" ;;
       brew)    [ "$NEED_BREW" = 0 ] && sys_plan "package index" "brew update (refreshes Homebrew itself, nothing upgraded)" ;;
@@ -1239,7 +1238,7 @@ case "$PM" in
   apt-get) DOCKER_HOW="Docker Engine + Compose, from download.docker.com (get.docker.com)" ;;
   dnf|yum) if [ "$OS_ID" = fedora ] || [ "$PM" = yum ]; then DOCKER_HOW="Docker Engine + Compose, from download.docker.com (get.docker.com)"
            else DOCKER_HOW="Docker Engine + Compose, from download.docker.com (docker-ce repo)"; fi ;;
-  pacman)  DOCKER_HOW="Docker Engine + Compose, pacman -S docker docker-compose docker-buildx" ;;
+  pacman)  DOCKER_HOW="Docker Engine + Compose, pacman -Syu docker docker-compose docker-buildx" ;;
   zypper)  DOCKER_HOW="Docker Engine + Compose, zypper install docker docker-compose" ;;
   apk)     DOCKER_HOW="Docker Engine + Compose, apk add docker docker-cli-compose" ;;
 esac
@@ -1250,6 +1249,9 @@ if [ "$DOCKER_TODO" = install ]; then
 elif [ "$DOCKER_TODO" = group ]; then
   NEED_DOCKER_GROUP=1; NEED_SYS=1
 fi
+# Arch: any package install is pacman -Syu (no partial upgrades), so the whole system is upgraded
+ARCH_UPG=0; [ "$PM" = pacman ] && { [ "$NEED_OS" = 1 ] || [ "$NEED_DOCKER" = 1 ]; } && ARCH_UPG=1
+[ "$ARCH_UPG" = 1 ] && sys_plan "system upgrade" "pacman -Syu: Arch supports installing only on an up-to-date system"
 [ "$NEED_DOCKER_GROUP" = 1 ] && sys_plan "docker group" "add $(id -un), to run docker without sudo (takes effect at your next login)"
 # ~/.npm with files owned by root (left by an earlier `sudo npm ...`): npm, and so Mason's
 # npm-based LSP servers, fail with EACCES until it belongs to you again
@@ -1446,7 +1448,7 @@ elif [ "$UI" = 1 ]; then
     printf '  %sYou%s %s%s only %s, in ~, no sudo%s\n' "$B" "$N" "$D" "$S_DOT" "$(id -un)" "$N" >&3
     plan_rows "${USER_PLAN[@]}"
   fi
-  if [ "$PM" = pacman ] && [ ${#SYS_PLAN[@]} -gt 0 ]; then
+  if [ "$ARCH_UPG" = 1 ]; then
     printf '\n  %sOn Arch, installing a package upgrades the system first; your own tools follow the latest release.%s\n' "$D" "$N" >&3
   else
     printf '\n  %sInstalled OS packages are kept as they are; your own tools follow the latest release.%s\n' "$D" "$N" >&3
@@ -1462,7 +1464,7 @@ else
     echo "   Only you ($(id -un)), in ~, no sudo:"
     print_rows "${USER_PLAN[@]}"
   fi
-  if [ "$PM" = pacman ] && [ ${#SYS_PLAN[@]} -gt 0 ]; then echo "   On Arch, installing a package upgrades the system first; everything else is kept at the latest release."
+  if [ "$ARCH_UPG" = 1 ]; then echo "   On Arch, installing a package upgrades the system first; everything else is kept at the latest release."
   else echo "   Installed OS packages are left as they are; everything else is kept at the latest release."; fi
 fi
 # One confirmation (a key press) on a terminal; ASSUME_YES=1 skips it
@@ -1510,6 +1512,13 @@ pm_add() { # pm_add PACKAGE...
     apk)     sudo apk add "$@" ;;
   esac
 }
+# Arch: the upgrade the plan showed, on its own (its output in the log, its own summary line), before
+# any package is installed; the installs after it only add packages
+if [ "$ARCH_UPG" = 1 ] && [ "$SUDO_OK" = 1 ]; then
+  step "Upgrading the system (pacman -Syu)"
+  if sudo pacman -Syu --noconfirm; then sys_did "system upgrade (pacman -Syu)"
+  else die "the system upgrade (pacman -Syu) failed (see above); nothing else was installed"; fi
+fi
 if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   if [ "$NEED_BREW" = 1 ]; then
     step "Installing Homebrew"
@@ -1521,12 +1530,11 @@ if [ "$NEED_OS" = 1 ] && [ "$SUDO_OK" = 1 ]; then
     for b in /opt/homebrew/bin/brew /usr/local/bin/brew; do [ -x "$b" ] && eval "$("$b" shellenv)"; done
     sys_did "Homebrew"
   fi
-  # Refresh the package index (does not upgrade anything)
-  if [ "$INDEX_FRESH" = 0 ]; then
+  # Refresh the package index (does not upgrade anything; Arch: done by the upgrade above)
+  if [ "$INDEX_FRESH" = 0 ] && [ "$PM" != pacman ]; then
     step "Updating the package index"
     case "$PM" in
       apt-get) sudo apt-get update || true ;;
-      pacman)  : ;; # refreshed together with the upgrade, by pacman -Syu when installing
       zypper)  sudo zypper --non-interactive refresh || true ;;
       apk)     sudo apk update || true ;;
       brew)    # started in the background before the plan (quietly: it lists every new formula)
