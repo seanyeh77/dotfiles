@@ -1597,15 +1597,18 @@ if [ "$NEED_DOCKER_GROUP" = 1 ] && [ "$SUDO_OK" = 1 ]; then
   else failed "docker group (sudo usermod -aG docker $me)"; fi
 fi
 
+# On macOS SUDO_OK=1 means Homebrew; these two fixes need the real sudo, which NO_SUDO=1 rules out
+# (as root or on Termux, sudo just runs the command, so NO_SUDO=1 changes nothing there)
+BREW_SUDO_OFF=0; [ "$PM" = brew ] && [ "${NO_SUDO:-0}" = 1 ] && BREW_SUDO_OFF=1
 if [ "$NPM_FIX" = 1 ]; then
   step "Giving ~/.npm back to you"
-  if [ "$SUDO_OK" = 1 ] && [ "${NO_SUDO:-0}" != 1 ] && on_screen sudo chown -R "$(id -u):$(id -g)" "$HOME/.npm"; then
+  if [ "$SUDO_OK" = 1 ] && [ "$BREW_SUDO_OFF" = 0 ] && on_screen sudo chown -R "$(id -u):$(id -g)" "$HOME/.npm"; then
     sys_did "~/.npm belongs to you again (npm and Mason can write to it)"
   else
     failed "npm cache ~/.npm is owned by root, so npm-based LSP servers fail (run: sudo chown -R $(id -un) ~/.npm)"
   fi
 fi
-if [ "$OLD_TS_LINK" = 1 ] && [ "$SUDO_OK" = 1 ] && [ "${NO_SUDO:-0}" != 1 ]; then
+if [ "$OLD_TS_LINK" = 1 ] && [ "$SUDO_OK" = 1 ] && [ "$BREW_SUDO_OFF" = 0 ]; then
   on_screen sudo rm -f /usr/local/bin/tree-sitter && sys_did "removed old link /usr/local/bin/tree-sitter"
 fi
 
