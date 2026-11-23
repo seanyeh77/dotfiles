@@ -100,6 +100,7 @@ spin_start() {
     while :; do
       [ $((i % 5)) = 0 ] && term_cols
       d="$(last_line "$INSTALL_LOG")"
+      label="${label:0:$((COLS > 30 ? COLS - 16 : 14))}" # a wrapped line would not be redrawn in place
       w=$((COLS - ${#label} - 14)); [ "$w" -gt 0 ] || w=0
       printf '\r%s[K  %s%s%s %s %s%ss  %s%s' "$ESC" "$TC" "${SPIN_FRAMES[$((i % nf))]}" "$TN" "$label" \
         "$TD" "$((SECONDS - t0))" "${d:0:$w}" "$TN" >&3
@@ -198,9 +199,10 @@ jobs_draw() { # one line per job; FINAL=1 draws the result instead of the spinne
       lab="$(cat "$jd.name")" # done: the job's own name, not its last step
       rc="$(cat "$jd.rc")"; el="$(cat "$jd.time" 2>/dev/null || echo "$((SECONDS - J_T0[i]))")"
       if [ "$rc" = 0 ] && ! grep -q '^failed' "$jd.res"; then m="$G$S_OK$N"; else m="$Y$S_WARN$N"; fi
-      printf '\r%s[K  %s %s %s(%ss)%s\n' "$ESC" "$m" "$lab" "$D" "$el" "$N" >&3
+      printf '\r%s[K  %s %s %s(%ss)%s\n' "$ESC" "$m" "${lab:0:$((COLS > 30 ? COLS - 12 : 18))}" "$D" "$el" "$N" >&3
     else
       d="$(last_line "$jd.log")"
+      lab="${lab:0:$((COLS > 30 ? COLS - 16 : 14))}" # a wrapped line would not be redrawn in place
       w=$((COLS - ${#lab} - 14)); [ "$w" -gt 0 ] || w=0
       printf '\r%s[K  %s%s%s %s %s%ss  %s%s\n' "$ESC" "$C" "${SPIN_FRAMES[$((J_TICK % ${#SPIN_FRAMES[@]}))]}" "$N" \
         "$lab" "$D" "$((SECONDS - J_T0[i]))" "${d:0:$w}" "$N" >&3
@@ -466,6 +468,7 @@ fi
 [ -n "$TERM_OFFER" ] && [ -z "${SETUP_TERMINAL:-}" ] && OPEN=1
 [ "$FONT_OFFER" = 1 ] && [ -z "${INSTALL_FONT:-}" ] && OPEN=1
 [ -z "${SETUP_SSH:-}" ] && OPEN=1
+[ -z "${INSTALL_GH:-}" ] && OPEN=1
 if [ -z "$ntfy_preset" ] && [ "${CLAUDE_NTFY:-}" = 0 ] && ! grep -qs '^ANSWERS_VERSION=[2-9]' "$ANSWERS"; then
   unset CLAUDE_NTFY
 fi
@@ -479,9 +482,10 @@ if [ -z "${CLAUDE_NTFY:-}" ] && grep -qs '^NTFY_TOPIC=..*' "$STATE_DIR/ntfy"; th
 M_ID=(); M_LABEL=(); M_DESC=(); M_KIND=(); M_ON=()
 m_add() { M_ID+=("$1"); M_LABEL+=("$2"); M_DESC+=("$3"); M_KIND+=("$4"); M_ON+=("$5"); }
 m_draw() { # m_draw CURSOR
-  local i on mark lab desc w pre parent_on=1
-  printf '  %sChoose what to install%s  %s(Neovim, tmux, LSP servers and git tools always)%s%s[K\n%s[K\n' \
-    "$TB" "$TN" "$TD" "$TN" "$ESC" "$ESC" >/dev/tty
+  local i on mark lab desc w pre parent_on=1 h f
+  # header and footer cut to the window too: a wrapped line would break the redraw
+  h="(Neovim, tmux, LSP servers and git tools always)"; h="${h:0:$((COLS > 27 ? COLS - 27 : 0))}"
+  printf '  %sChoose what to install%s  %s%s%s%s[K\n%s[K\n' "$TB" "$TN" "$TD" "$h" "$TN" "$ESC" "$ESC" >/dev/tty
   for i in "${!M_ID[@]}"; do
     on="${M_ON[$i]}"; lab="${M_LABEL[$i]}"; desc="${M_DESC[$i]}"
     [ "${M_KIND[$i]}" = main ] && parent_on="$on"
@@ -495,11 +499,12 @@ m_draw() { # m_draw CURSOR
     fi
     [ "$i" = "$1" ] && st="$st$TB"
     lab="$(printf '%-33s' "$lab")"
-    w=$((COLS - 40)); [ "$w" -gt 0 ] || w=0
+    w=$((COLS - 38 - ${#S_ON})); [ "$w" -gt 0 ] || w=0 # ([x] is 3 columns without UTF-8)
     printf ' %s %s %s%s%s %s%s%s%s[K\n' "$pre" "$mark" "$st" "$lab" "$TN" "$TD" "${desc:0:$w}" "$TN" "$ESC" >/dev/tty
   done
-  printf '%s[K\n  %s↑↓ move  Space toggle  a all  n none  Enter continue  q quit%s%s[K\n' \
-    "$ESC" "$TD" "$TN" "$ESC" >/dev/tty
+  if [ "$UTF" = 1 ]; then f="↑↓ move"; else f="Up/Down move"; fi
+  f="$f  Space toggle  a all  n none  Enter continue  q quit"
+  printf '%s[K\n  %s%s%s%s[K\n' "$ESC" "$TD" "${f:0:$((COLS > 3 ? COLS - 3 : 0))}" "$TN" "$ESC" >/dev/tty
 }
 m_lines() { echo $(( ${#M_ID[@]} + 4 )); }
 m_key() { # -> KEY
@@ -783,10 +788,10 @@ fi
 INDEX_FRESH=0
 if [ "$NEED_OS" = 1 ] && [ "$(id -u)" -eq 0 ]; then
   case "$PM" in
-    apt-get) apt-get update -qq >/dev/null 2>&1 || true ;;
-    pacman)  pacman -Sy --noconfirm >/dev/null 2>&1 || true ;;
-    zypper)  zypper --non-interactive -q refresh >/dev/null 2>&1 || true ;;
-    apk)     apk update -q >/dev/null 2>&1 || true ;;
+    apt-get) with_timeout 180 apt-get update -qq </dev/null >/dev/null 2>&1 || true ;;
+    pacman)  with_timeout 180 pacman -Sy --noconfirm </dev/null >/dev/null 2>&1 || true ;;
+    zypper)  with_timeout 180 zypper --non-interactive -q refresh </dev/null >/dev/null 2>&1 || true ;;
+    apk)     with_timeout 180 apk update -q </dev/null >/dev/null 2>&1 || true ;;
   esac
   INDEX_FRESH=1
 fi
@@ -869,7 +874,7 @@ TMP="$(mktemp -d)"
 gitg() { env -u GIT_CONFIG_GLOBAL git "$@"; }
 if has git && git config --global --includes --get-regexp '^url\..*\.insteadof$' >/dev/null 2>&1; then
   : > "$TMP/gitconfig"
-  git config --global --includes --list 2>/dev/null | { grep -iv '^url\.' || true; } | while IFS= read -r kv; do
+  git config --global --includes --list 2>/dev/null | { grep -iv -e '^url\.' -e '^include\.' -e '^includeif\.' || true; } | while IFS= read -r kv; do
     case "$kv" in # a key without "=" is a boolean written without a value ([http] sslVerify)
       *=*) git config -f "$TMP/gitconfig" --add "${kv%%=*}" "${kv#*=}" 2>/dev/null || true ;;
       *)   git config -f "$TMP/gitconfig" --add "$kv" true 2>/dev/null || true ;;
@@ -1367,8 +1372,9 @@ plan_rows() {
   done
   for i in "${!NA[@]}"; do
     room=$((COLS - wn - wv - 10)); [ "$room" -gt 0 ] || room=0
-    rest="${RE[$i]}"; [ ${#rest} -gt "$room" ] && rest="${rest:0:$((room > 1 ? room - 1 : 0))}$S_ELL"
-    printf '    %s %-*s  %s%-*s%s  %s%s%s\n' "${SY[$i]}" "$wn" "${NA[$i]}" "$B" "$wv" "${VE[$i]}" "$N" "$D" "$rest" "$N" >&3
+    rest="${RE[$i]}"; [ ${#rest} -gt "$room" ] && rest="${rest:0:$((room > ${#S_ELL} ? room - ${#S_ELL} : 0))}$S_ELL"
+    # padded by hand: printf pads by bytes, and "→" is 3 bytes for 1 column
+    printf '    %s %-*s  %s%s%*s%s  %s%s%s\n' "${SY[$i]}" "$wn" "${NA[$i]}" "$B" "${VE[$i]}" $((wv - ${#VE[$i]})) "" "$N" "$D" "$rest" "$N" >&3
   done
 }
 if [ ${#SYS_PLAN[@]} -eq 0 ] && [ ${#USER_PLAN[@]} -eq 0 ]; then
@@ -1436,7 +1442,8 @@ if [ "$NEED_SYS" = 1 ] && [ "$SUDO_OK" = 2 ]; then
   if sudo -v </dev/tty >&3 2>&4; then
     SUDO_OK=1
     # keep the sudo timestamp fresh, so a long install never stops to ask again
-    ( while kill -0 $$ 2>/dev/null; do sudo -n -v 2>/dev/null || true; sleep 50; done ) &
+    # (not holding the output open: a pipe like `| tee` would wait for its sleep after the end)
+    ( while kill -0 $$ 2>/dev/null; do sudo -n -v 2>/dev/null || true; sleep 50; done ) >/dev/null 2>&1 3>&- 4>&- &
   else SUDO_OK=0; fi
 fi
 pm_add() { # pm_add PACKAGE...
@@ -2252,7 +2259,8 @@ job_claude_plugins() {
 SSH_TODO=0
 for i in "${!TZ_TOOLS[@]}"; do [ "${TZ_NEED[$i]}" = 1 ] && SSH_TODO=1; done
 [ "$NEED_SSHCFG" = 1 ] && SSH_TODO=1
-if [ "$SETUP_SSH" = 1 ] && [ ! -e "$HOME/.tssh.conf" ] && [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/tssh/tssh.conf" ]; then SSH_TODO=1; fi
+if [ "$SETUP_SSH" = 1 ] && { [ "$OS" = Darwin ] || [ -d "$HOME/Downloads" ]; } \
+   && [ ! -e "$HOME/.tssh.conf" ] && [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/tssh/tssh.conf" ]; then SSH_TODO=1; fi # (job_ssh's own test)
 [ "$SSH_TODO" = 1 ] && job ssh "SSH tools" job_ssh
 { [ "$NEED_FONT" = 1 ] || [ "$NEED_GHOSTTY" = 1 ] || [ "$NEED_ITERM" = 1 ] || [ "$NEED_ITERM_THEME" = 1 ] \
   || [ "$NEED_TERM_UPD" = 1 ]; } && job terminal "Terminal setup" job_terminal
