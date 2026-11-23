@@ -260,7 +260,7 @@ jobs_wait() {
   return 0
 }
 
-trap 'spin_stop; [ "$UI" = 1 ] && printf "%s[?25h" "$ESC" >&3; stty echo </dev/tty 2>/dev/null || true' EXIT
+trap 'spin_stop; [ "$UI" = 1 ] && printf "%s[?25h" "$ESC" >&3; stty echo 2>/dev/null </dev/tty || true' EXIT
 trap 'exit 130' INT TERM
 
 # Each user gets their own Neovim, Node.js and tree-sitter in ~/.local, so users on the same
@@ -344,6 +344,12 @@ printf '==> OS: %s (%s)  Arch: %s  WSL: %s\n' "$OS_NAME" "$PM" "$ARCH" "$IS_WSL"
 # apk / pkg there anyway): use the package manager's on macOS, musl (Alpine) and Termux
 USE_PM=0
 if [ "$PM" = brew ] || [ "$PM" = apk ] || [ "$IS_TERMUX" = 1 ]; then USE_PM=1; fi
+
+# A DOTFILES_DIR that is not this repo (a typo, DOTFILES_DIR=~): stop now, before anything is
+# installed, not when the config files would be copied from it (and the old ones already removed)
+if [ -n "$DOTFILES_DIR" ] && [ ! -f "$DOTFILES_DIR/nvim/init.lua" ]; then
+  die "DOTFILES_DIR=$DOTFILES_DIR is not a checkout of the dotfiles repo (no nvim/init.lua there)"
+fi
 
 # ---------- Who can change the system ----------
 # Root, Homebrew, or a user with sudo (the password is asked once, after the plan, and only when
@@ -1634,6 +1640,7 @@ install_file() {
 # only created, never overwritten (lazyvim.json, which LazyVim itself updates).
 install_tree() {
   local src="$1" dst="$2" key="$3" f k keep; shift 3
+  [ -d "$src" ] || die "missing $src in the downloaded repo" # before anything in DST is removed
   if [ -L "$dst" ]; then rm -f "${dst:?}"
   elif [ -d "$dst" ] && [ ! -d "$PRISTINE/$key" ]; then
     # a config that did not come from this installer: set it aside
