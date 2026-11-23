@@ -60,7 +60,8 @@ dotfiles_ssh() {
 # network drive and ignores most plugins ("added but ignored", "does not stay inside the
 # marketplace directory"). Giving it the folder's real path fixes that; harmless elsewhere.
 if [ -z "${CLAUDE_CODE_PLUGIN_CACHE_DIR:-}" ] && [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then
-  _r="$(cd -P "$HOME" 2>/dev/null && pwd)"
+  # >/dev/null: zsh chpwd hooks (e.g. ls after cd) print even in this subshell
+  _r="$(cd -P "$HOME" >/dev/null 2>&1 && pwd -P)"
   if [ -n "$_r" ] && [ "$_r" != "$HOME" ]; then export CLAUDE_CODE_PLUGIN_CACHE_DIR="$_r/.claude/plugins"; fi
   unset _r
 fi
@@ -70,11 +71,14 @@ fi
 # skips the question (dark: Catppuccin Mocha and most terminal themes).
 if [ -n "${SSH_CONNECTION:-}" ] && [ -z "${GLAMOUR_STYLE:-}" ]; then export GLAMOUR_STYLE=dark; fi
 
-# Not when "SSH tools" is unticked in the installer's checklist (SETUP_SSH=0 in its saved answers)
-if [ -z "${SSH_CONNECTION:-}" ] && { command -v tssh >/dev/null 2>&1 || command -v trzsz >/dev/null 2>&1; } \
-   && ! grep -qs '^SETUP_SSH=0' "${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles/answers"; then
-  alias ssh=dotfiles_ssh
-fi
+# Not when "SSH tools" is unticked in the installer's checklist (SETUP_SSH=0 in its saved answers).
+# Interactive shells only: scripts never expand aliases, so the checks would only cost time there
+case "$-" in *i*)
+  if [ -z "${SSH_CONNECTION:-}" ] && { command -v tssh >/dev/null 2>&1 || command -v trzsz >/dev/null 2>&1; } \
+     && ! grep -qs '^SETUP_SSH=0' "${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles/answers"; then
+    alias ssh=dotfiles_ssh
+  fi ;;
+esac
 
 # sshk HOST: ssh, but first copy your ed25519 key there if the host does not accept it yet (asks
 # for the password once), so later logins need no password. Creates ~/.ssh/id_ed25519 if missing

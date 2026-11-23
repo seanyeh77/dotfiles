@@ -1,4 +1,4 @@
-# Ghostty config (https://ghostty.org/docs/config), linked to ~/.config/ghostty/config by install.sh.
+# Ghostty config (https://ghostty.org/docs/config), copied to ~/.config/ghostty/config by install.sh.
 # Matches nvim and tmux: Catppuccin Mocha, JetBrainsMono Nerd Font. Reload with Cmd-Shift-,
 
 font-family = JetBrainsMono Nerd Font

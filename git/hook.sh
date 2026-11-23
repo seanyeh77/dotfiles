@@ -2,7 +2,9 @@
 # Global git hooks for this dotfiles setup (git config --global core.hooksPath points here).
 # commit-msg removes the lines Claude Code adds to credit itself, so Claude never shows up as a
 # co-author, whatever its settings. Every hook then runs the repository's own hook of the same
-# name, so per-project hooks (pre-commit, linters, ...) keep working.
+# name, so per-project hooks (pre-commit, linters, ...) keep working. With a global core.hooksPath git
+# looks only here: a hook name without a link in hooks/ never runs, so every common one has a link
+# (also the server-side ones, for bare repositories with a deploy post-receive hook).
 name="$(basename "$0")"
 if [ "$name" = commit-msg ] && [ -f "${1:-}" ]; then
   tmp="$1.dotfiles.$$"

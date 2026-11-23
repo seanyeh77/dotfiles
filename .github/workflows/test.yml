@@ -275,8 +275,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      # Write the whole PATH: in container jobs GITHUB_PATH rebuilds PATH from the image config,
-      # and images without a PATH entry (openSUSE Tumbleweed) end up with only ~/.local/bin
       - uses: actions/checkout@v5 # only for the ci/ scripts; the install itself downloads the repo
       - name: put ~/.local/bin on PATH (steps do not read ~/.bashrc)
         run: echo "PATH=$HOME/.local/bin:$PATH" >> "$GITHUB_ENV"

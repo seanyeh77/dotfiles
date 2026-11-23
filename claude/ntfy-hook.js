@@ -57,7 +57,9 @@ function lastText(file) {
 }
 
 const ev = input.hook_event_name;
-const dir = (input.cwd || process.cwd()).replace(os.homedir(), "~");
+const home = os.homedir();
+let dir = input.cwd || process.cwd();
+if (dir === home || dir.startsWith(home + "/")) dir = "~" + dir.slice(home.length); // only a leading home
 const where = `${os.hostname().split(".")[0]}:${dir}`;
 let msg;
 if (ev === "Notification") {

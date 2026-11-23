@@ -89,6 +89,8 @@ term_cols
 
 SPIN_PID=""; STEP_LABEL=""; STEP_T0=0; STEP_BAD=0; STEP_MSGS=()
 # A background loop redraws "⠋ label  12s  <last line of the log>" until spin_stop
+# last_line FILE: its last line without colours or the installer's own ==> / !! lines (spinner text)
+last_line() { tail -n 1 "$1" 2>/dev/null | tr -d '\r' | sed "s/${ESC}\[[0-9;?]*[A-Za-z]//g; /^==> /d; /^!! /d" || true; }
 spin_start() {
   [ "$UI" = 1 ] || return 0
   local label="$1" t0="$SECONDS"
@@ -97,7 +99,7 @@ spin_start() {
     i=0; nf=${#SPIN_FRAMES[@]}
     while :; do
       [ $((i % 5)) = 0 ] && term_cols
-      d="$(tail -n 1 "$INSTALL_LOG" 2>/dev/null | tr -d '\r' | sed "s/${ESC}\[[0-9;?]*[A-Za-z]//g; /^==> /d; /^!! /d" || true)"
+      d="$(last_line "$INSTALL_LOG")"
       w=$((COLS - ${#label} - 14)); [ "$w" -gt 0 ] || w=0
       printf '\r%s[K  %s%s%s %s %s%ss  %s%s' "$ESC" "$TC" "${SPIN_FRAMES[$((i % nf))]}" "$TN" "$label" \
         "$TD" "$((SECONDS - t0))" "${d:0:$w}" "$TN" >&3
@@ -181,7 +183,7 @@ job() { # job NAME LABEL FUNCTION
     exec >> "$jd.log" 2>&1 </dev/null
     # -e would be ignored inside ( ... ) || ...: run it as a plain statement with +e outside
     set +e; ( set -e; "$@" ); rc=$?
-    echo "$rc" > "$jd.rc"
+    echo "$rc" > "$jd.rc.tmp"; mv -f "$jd.rc.tmp" "$jd.rc" # appears only once written
   ) &
   J_NAMES+=("$name"); J_PIDS+=("$!"); J_T0+=("$SECONDS")
   # Little memory: one step at a time (see SERIAL)
@@ -199,7 +201,7 @@ jobs_draw() { # one line per job; FINAL=1 draws the result instead of the spinne
       if [ "$rc" = 0 ] && ! grep -q '^failed' "$jd.res"; then m="$G$S_OK$N"; else m="$Y$S_WARN$N"; fi
       printf '\r%s[K  %s %s %s(%ss)%s\n' "$ESC" "$m" "$lab" "$D" "$el" "$N" >&3
     else
-      d="$(tail -n 1 "$jd.log" 2>/dev/null | tr -d '\r' | sed "s/${ESC}\[[0-9;?]*[A-Za-z]//g; /^==> /d; /^!! /d" || true)"
+      d="$(last_line "$jd.log")"
       w=$((COLS - ${#lab} - 14)); [ "$w" -gt 0 ] || w=0
       printf '\r%s[K  %s%s%s %s %s%ss  %s%s\n' "$ESC" "$C" "${SPIN_FRAMES[$((J_TICK % ${#SPIN_FRAMES[@]}))]}" "$N" \
         "$lab" "$D" "$((SECONDS - J_T0[i]))" "${d:0:$w}" "$N" >&3
@@ -337,10 +339,8 @@ printf '==> OS: %s (%s)  Arch: %s  WSL: %s\n' "$OS_NAME" "$PM" "$ARCH" "$IS_WSL"
 
 # The official nvim / node / tree-sitter / uv / Python builds need glibc: use the package
 # manager's on macOS, musl (Alpine) and Termux
-USE_PM_NVIM=0; USE_PM_NODE=0; USE_PM_TOOLS=0
-[ "$PM" = brew ] && { USE_PM_NVIM=1; USE_PM_NODE=1; USE_PM_TOOLS=1; }
-[ "$PM" = apk ]  && { USE_PM_NVIM=1; USE_PM_NODE=1; USE_PM_TOOLS=1; }
-[ "$IS_TERMUX" = 1 ] && { USE_PM_NVIM=1; USE_PM_NODE=1; USE_PM_TOOLS=1; }
+USE_PM=0
+if [ "$PM" = brew ] || [ "$PM" = apk ] || [ "$IS_TERMUX" = 1 ]; then USE_PM=1; fi
 
 # ---------- Who can change the system ----------
 # Root, Homebrew, or a user with sudo (the password is asked once, after the plan, and only when
@@ -592,7 +592,7 @@ if [ "$INSTALL_CLAUDE" = 1 ]; then CLAUDE_PLUGINS="${CLAUDE_PLUGINS-$ALL_PLUGINS
 # Without a terminal (nothing was asked): on when a topic is known, from NTFY_TOPIC or an earlier setup
 if [ -z "${CLAUDE_NTFY:-}" ]; then
   CLAUDE_NTFY=0
-  if [ -n "${NTFY_TOPIC:-}" ] || grep -qs '^NTFY_TOPIC=..*' "$STATE_DIR/ntfy"; then CLAUDE_NTFY=1; fi
+  [ -n "${NTFY_TOPIC:-}" ] && CLAUDE_NTFY=1 # (a saved topic turned it on earlier)
 fi
 [ "$INSTALL_CLAUDE" = 1 ] || CLAUDE_NTFY=0
 
@@ -616,7 +616,7 @@ if [ "$CLAUDE_NTFY" = 1 ] && ! grep -qs '^NTFY_TOPIC=..*' "$NTFY_CONF"; then
     if [ "$SAVED_ANSWERS" = 1 ]; then
       printf '\n  %sUsing the choices saved earlier (DOTFILES_ASK=1 shows the checklist again)%s\n' "$D" "$N" >/dev/tty
     fi
-    printf '\n  %sntfy notifications%s %s(saved only on this machine, in %s)%s\n' "$B" "$N" "$D" "${NTFY_CONF/#$HOME/~}" "$N" >/dev/tty
+    printf '\n  %sntfy notifications%s %s(saved only on this machine, in %s)%s\n' "$B" "$N" "$D" "${NTFY_CONF/#$HOME/\~}" "$N" >/dev/tty
     printf '  %sEnter keeps the value in [ ]; topic "none" turns notifications off%s\n' "$D" "$N" >/dev/tty
     n_url="$(ask_line "Server:" "${n_url:-https://ntfy.sh}")"
     # Anyone who knows a topic on a public server can read it: suggest one nobody can guess
@@ -871,7 +871,7 @@ TMP="$(mktemp -d)"
 gitg() { env -u GIT_CONFIG_GLOBAL git "$@"; }
 if has git && git config --global --includes --get-regexp '^url\..*\.insteadof$' >/dev/null 2>&1; then
   : > "$TMP/gitconfig"
-  git config --global --includes --list 2>/dev/null | grep -iv '^url\.' | while IFS= read -r kv; do
+  git config --global --includes --list 2>/dev/null | { grep -iv '^url\.' || true; } | while IFS= read -r kv; do
     git config -f "$TMP/gitconfig" --add "${kv%%=*}" "${kv#*=}" 2>/dev/null || true
   done
   export GIT_CONFIG_GLOBAL="$TMP/gitconfig"
@@ -940,12 +940,12 @@ NVIM_REPO=neovim/neovim
 # (no GNU_LIBC_VERSION on musl or macOS: getconf fails there, which must not stop set -e)
 GLIBC_VER="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{ print $2 }' || true)"; gm="${GLIBC_VER#2.}"; gm="${gm%%.*}"
 case "$GLIBC_VER" in 2.[0-9]*) [ "$gm" -lt 34 ] 2>/dev/null && NVIM_REPO=neovim/neovim-releases ;; esac
-[ "$USE_PM_NVIM" = 0 ] && lookup nvim "Neovim" gh_latest "$NVIM_REPO"
+[ "$USE_PM" = 0 ] && lookup nvim "Neovim" gh_latest "$NVIM_REPO"
 # Installed terminal apps on macOS: their own update feeds (brew's casks can lag a release by days)
 [ "$USE_GHOSTTY" = 1 ] && [ -d /Applications/Ghostty.app ] && lookup ghostty_app "Ghostty" lk_appcast https://release.files.ghostty.org/appcast.xml
 [ "$USE_ITERM" = 1 ] && [ -d /Applications/iTerm.app ] && lookup iterm_app "iTerm2" lk_appcast https://iterm2.com/appcasts/final_modern.xml
-[ "$USE_PM_NODE" = 0 ] && lookup node "Node.js LTS" lk_node
-if [ "$USE_PM_TOOLS" = 0 ]; then
+[ "$USE_PM" = 0 ] && lookup node "Node.js LTS" lk_node
+if [ "$USE_PM" = 0 ]; then
   lookup ts "tree-sitter CLI" gh_latest tree-sitter/tree-sitter
   lookup uv "uv" gh_latest astral-sh/uv
   lookup lazygit "lazygit" gh_latest jesseduffield/lazygit
@@ -966,7 +966,7 @@ fi
 [ -d "$OH_MY_TMUX/.git" ] && lookup omt "Oh my tmux!" git_update "$OH_MY_TMUX"
 if [ "$INSTALL_CLAUDE" = 1 ]; then
   lookup claude "Claude Code" lk_claude
-  has claude && lookup claude_plugins "Claude plugins" claude plugin list
+  has claude && lookup claude_plugins "Claude plugins" timeout_cmd 60 claude plugin list
 fi
 # Wait for all of them, printing each one as it finishes (at most ~2 minutes: every lookup is bounded)
 lookup_wait() {
@@ -984,34 +984,35 @@ lookup_wait() {
     # On a terminal: one line that updates in place
     [ -z "$pending" ] && break
     if [ "$UI" = 1 ]; then
-      w="$(printf '%s' "${pending#, }" | cut -c1-$((COLS - 24)))"
+      w=$((COLS - 24)); [ "$w" -gt 0 ] || w=0; p="${pending#, }"; w="${p:0:$w}"
       printf '\r%s[K  %s%s%s checking %s%ss  %s%s' "$ESC" "$C" "${SPIN_FRAMES[$((SECONDS % ${#SPIN_FRAMES[@]}))]}" "$N" "$D" \
         "$((SECONDS - start))" "$w" "$N" >&3
     fi
     sleep 1
   done
   if [ "$UI" = 1 ]; then printf '\r%s[K  %s%s%s checked %d versions %s(%ss)%s\n' "$ESC" "$G" "$S_OK" "$N" "$n" "$D" "$((SECONDS - start))" "$N" >&3; fi
-  wait 2>/dev/null || true
+  # Only the lookups: a bare `wait` would also wait for (and reap) the background brew update
+  wait ${L_PIDS[@]+"${L_PIDS[@]}"} 2>/dev/null || true
 }
 lookup_wait
 
 # Neovim / Node.js: own copies on glibc Linux; macOS and Alpine use the package manager's builds
 NVIM_CUR=""; NVIM_LATEST=""; NEED_NVIM=0
-if [ "$USE_PM_NVIM" = 0 ]; then
+if [ "$USE_PM" = 0 ]; then
   NVIM_CUR="$(first_line "$("$LOCAL_OPT/nvim/bin/nvim" --version 2>/dev/null || true)")"; NVIM_CUR="${NVIM_CUR#NVIM }"
   NVIM_LATEST="$(lookup_result nvim)"
   case "$NVIM_LATEST" in v[0-9]*) ;; *) NVIM_LATEST="" ;; esac
   outdated "$NVIM_CUR" "$NVIM_LATEST" && NEED_NVIM=1
 fi
 NODE_CUR=""; NODE_LATEST=""; NEED_NODE=0
-if [ "$USE_PM_NODE" = 0 ]; then
+if [ "$USE_PM" = 0 ]; then
   NODE_CUR="$("$LOCAL_OPT/node/bin/node" -v 2>/dev/null || true)"
   NODE_LATEST="$(lookup_result node)"
   outdated "$NODE_CUR" "$NODE_LATEST" && NEED_NODE=1
 fi
 # tree-sitter CLI (brew / apk: package manager)
 TS_CUR=""; TS_LATEST=""; NEED_TS=0
-if [ "$USE_PM_TOOLS" = 0 ]; then
+if [ "$USE_PM" = 0 ]; then
   if ts_works "$LOCAL_BIN/tree-sitter"; then
     TS_CUR="$("$LOCAL_BIN/tree-sitter" --version 2>/dev/null || true)"; TS_CUR="$(printf '%s' "$TS_CUR" | awk '{print "v" $2}')"
   fi
@@ -1052,7 +1053,7 @@ if [ "$SETUP_SSH" = 1 ] && [ "$IS_TERMUX" = 0 ] && ! grep -qs 'TsshdPath' "$SSH_
 # lazygit (git UI, Space g g in nvim): a static binary in ~/.local/bin on Linux; macOS, Alpine and
 # Termux take it from their package manager (OS_OPT)
 LG_CUR=""; LG_LATEST=""; NEED_LG=0
-if [ "$USE_PM_TOOLS" = 0 ]; then
+if [ "$USE_PM" = 0 ]; then
   [ -x "$LOCAL_BIN/lazygit" ] && LG_CUR="v$("$LOCAL_BIN/lazygit" --version 2>/dev/null | sed -n 's/.*, version=\([^,]*\),.*/\1/p' || true)"
   [ "$LG_CUR" = v ] && LG_CUR=""
   LG_LATEST="$(lookup_result lazygit)"
@@ -1061,7 +1062,7 @@ fi
 # GitHub CLI (gh: pull requests, issues, Actions from the terminal; Claude Code uses it too): a static
 # binary in ~/.local/bin on Linux, like lazygit; macOS, Alpine and Termux take it from their package manager
 GH_CUR=""; GH_LATEST=""; NEED_GH=0
-if [ "$USE_PM_TOOLS" = 0 ] && [ "$INSTALL_GH" = 1 ]; then
+if [ "$USE_PM" = 0 ] && [ "$INSTALL_GH" = 1 ]; then
   [ -x "$LOCAL_BIN/gh" ] && GH_CUR="v$("$LOCAL_BIN/gh" --version 2>/dev/null | sed -n '1s/^gh version \([^ ]*\).*/\1/p' || true)"
   [ "$GH_CUR" = v ] && GH_CUR=""
   GH_LATEST="$(lookup_result gh)"
@@ -1070,7 +1071,7 @@ fi
 # fzf (fuzzy finder: Ctrl-R history, Ctrl-T files, Alt-C cd in the shell, see shell/env.sh): a static
 # binary in ~/.local/bin on Linux; macOS, Alpine and Termux take it from their package manager
 FZF_CUR=""; FZF_LATEST=""; NEED_FZF=0
-if [ "$USE_PM_TOOLS" = 0 ]; then
+if [ "$USE_PM" = 0 ]; then
   [ -x "$LOCAL_BIN/fzf" ] && FZF_CUR="v$("$LOCAL_BIN/fzf" --version 2>/dev/null | awk '{print $1}' || true)"
   [ "$FZF_CUR" = v ] && FZF_CUR=""
   FZF_LATEST="$(lookup_result fzf)"
@@ -1089,7 +1090,6 @@ elif [ -n "${PYTHON_VERSION:-}" ]; then case "$PY_CUR" in "$PYTHON_VERSION"|"$PY
 elif outdated "$PY_CUR" "$PY_LATEST"; then NEED_PY=1; fi
 [ "$IS_TERMUX" = 1 ] && NEED_PY=0 # from Termux's packages (uv cannot download Python for Android)
 
-# Oh my tmux! (git): cloned when missing, fast-forwarded when the remote has new commits
 # This repo's config files: compared by commit here; the files themselves when they are copied
 DF_CUR="$(cat "$STATE_DIR/version" 2>/dev/null || true)"; DF_LATEST="$(lookup_result dotfiles)"
 DF_CUR="${DF_CUR:0:7}"; DF_LATEST="${DF_LATEST:0:7}"
@@ -1106,6 +1106,7 @@ if [ "$DOTFILES_DIR" != "$OLD_DOTFILES" ] && [ -d "$OLD_DOTFILES/.git" ] && has 
       else warn "~/dotfiles has changes of yours, so it is kept; nothing uses it any more"; fi ;;
   esac
 fi
+# Oh my tmux! (git): cloned when missing, fast-forwarded when the remote has new commits
 NEED_OMT=0; OMT_UPD=""
 if [ -d "$OH_MY_TMUX/.git" ]; then OMT_UPD="$(lookup_result omt)"; else NEED_OMT=1; fi
 
@@ -1259,7 +1260,8 @@ NTFY_HOOK="$STATE_DIR/claude-ntfy.js"; NEED_NTFY_HOOK=0
 if [ "$CLAUDE_NTFY" = 1 ] && ! grep -qs 'claude-ntfy.js' "$CLAUDE_SETTINGS"; then
   NEED_NTFY_HOOK=1
   user_plan "ntfy" "push to topic $(sed -n 's/^NTFY_TOPIC=//p' "$NTFY_CONF") when Claude is done or needs you"
-elif [ "$CLAUDE_NTFY" = 0 ] && grep -qs 'claude-ntfy.js' "$CLAUDE_SETTINGS"; then
+elif [ "$INSTALL_CLAUDE" = 1 ] && [ "$CLAUDE_NTFY" = 0 ] && grep -qs 'claude-ntfy.js' "$CLAUDE_SETTINGS"; then
+  # (only with Claude Code chosen: the job that edits its settings runs only then)
   NEED_NTFY_HOOK=1
   user_plan "ntfy" "notifications off: remove the hooks from ~/.claude/settings.json"
 fi
@@ -1504,14 +1506,14 @@ if [ "$NEED_DOCKER" = 1 ] && [ "$SUDO_OK" = 1 ]; then
     apt-get|yum)
       # shellcheck disable=SC2024 # the log is written as this user, on purpose
       # Docker's own script; distributions it does not know (e.g. Linux Mint) get the distro's package
-      if fetch https://get.docker.com "$TMP/get-docker.sh" && sudo sh "$TMP/get-docker.sh" > "$TMP/docker.log" 2>&1; then docker_ok=1
+      if fetch_once https://get.docker.com "$TMP/get-docker.sh" && sudo sh "$TMP/get-docker.sh" > "$TMP/docker.log" 2>&1; then docker_ok=1
       elif [ "$PM" = apt-get ] && pm_add docker.io >> "$TMP/docker.log" 2>&1; then
         pm_add docker-compose-v2 >/dev/null 2>&1 || pm_add docker-compose >/dev/null 2>&1 || true; docker_ok=1
       fi ;;
     dnf)
       if [ "$OS_ID" = fedora ]; then
         # shellcheck disable=SC2024 # the log is written as this user, on purpose
-        fetch https://get.docker.com "$TMP/get-docker.sh" && sudo sh "$TMP/get-docker.sh" > "$TMP/docker.log" 2>&1 && docker_ok=1
+        fetch_once https://get.docker.com "$TMP/get-docker.sh" && sudo sh "$TMP/get-docker.sh" > "$TMP/docker.log" 2>&1 && docker_ok=1
       else # RHEL, Rocky, Alma, CentOS Stream: Docker's CentOS repository
         { sudo dnf install -y dnf-plugins-core \
           && sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo \
@@ -1707,6 +1709,16 @@ esac
 . "$STATE_DIR/env.sh"
 
 # ---------- What runs in parallel (each a function, started as a job below) ----------
+# unpack_opt URL DIR: download a release tarball (.tar.gz or .tar.xz) and unpack it as DIR,
+# dropping its top folder (dies when the download fails)
+unpack_opt() {
+  local f z=z
+  f="$TMP/$(basename "$1")"
+  case "$1" in *.xz) z=J ;; esac
+  fetch "$1" "$f"
+  rm -rf "$2" && mkdir -p "$2"
+  tar -C "$2" --strip-components=1 -x${z}f "$f"
+}
 job_nvim() {
   # ---------- Neovim ----------
   # glibc Linux: official release in ~/.local/opt/nvim (distro versions are often too old; the
@@ -1714,17 +1726,13 @@ job_nvim() {
   if [ "$NEED_NVIM" = 1 ]; then
     step "Installing Neovim ${NVIM_LATEST:-latest} ($NVIM_ARCH) in ~/.local/opt/nvim"
     if [ -n "$NVIM_LATEST" ]; then u="download/$NVIM_LATEST"; else u="latest/download"; fi
-    fetch "https://github.com/$NVIM_REPO/releases/$u/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
-    rm -rf "$LOCAL_OPT/nvim" && mkdir -p "$LOCAL_OPT/nvim"
-    tar -C "$LOCAL_OPT/nvim" --strip-components=1 -xzf "$TMP/nvim.tar.gz"
+    unpack_opt "https://github.com/$NVIM_REPO/releases/$u/nvim-linux-${NVIM_ARCH}.tar.gz" "$LOCAL_OPT/nvim"
     ln -sf "$LOCAL_OPT/nvim/bin/nvim" "$LOCAL_BIN/nvim"
     hash -r
     if ! nvim --version >/dev/null 2>&1 && [ "$NVIM_REPO" = neovim/neovim ]; then
       # glibc not detected, or too old after all: the build for older glibc
       note "the official build does not run here, using the one for older glibc (neovim-releases)"
-      fetch "https://github.com/neovim/neovim-releases/releases/latest/download/nvim-linux-${NVIM_ARCH}.tar.gz" "$TMP/nvim.tar.gz"
-      rm -rf "$LOCAL_OPT/nvim" && mkdir -p "$LOCAL_OPT/nvim"
-      tar -C "$LOCAL_OPT/nvim" --strip-components=1 -xzf "$TMP/nvim.tar.gz"
+      unpack_opt "https://github.com/neovim/neovim-releases/releases/latest/download/nvim-linux-${NVIM_ARCH}.tar.gz" "$LOCAL_OPT/nvim"
       hash -r
     fi
     nvim --version >/dev/null 2>&1 || die "nvim failed to run here (see the log); try a newer OS release"
@@ -1743,10 +1751,7 @@ job_node() {
     failed "Node.js (could not look up the latest LTS on nodejs.org)"
   elif [ "$NEED_NODE" = 1 ]; then
     step "Installing Node.js $NODE_LATEST ($NODE_ARCH) in ~/.local/opt/node"
-    NODE_TAR="node-$NODE_LATEST-linux-$NODE_ARCH.tar.xz"
-    fetch "https://nodejs.org/dist/$NODE_LATEST/$NODE_TAR" "$TMP/$NODE_TAR"
-    rm -rf "$LOCAL_OPT/node" && mkdir -p "$LOCAL_OPT/node"
-    tar -C "$LOCAL_OPT/node" --strip-components=1 -xJf "$TMP/$NODE_TAR"
+    unpack_opt "https://nodejs.org/dist/$NODE_LATEST/node-$NODE_LATEST-linux-$NODE_ARCH.tar.xz" "$LOCAL_OPT/node"
     for b in node npm npx; do ln -sf "$LOCAL_OPT/node/bin/$b" "$LOCAL_BIN/$b"; done
     hash -r
     if ! node_ok; then failed "Node.js"
@@ -1804,60 +1809,39 @@ job_ssh() {
   fi
 
 }
-job_lazygit() {
-  # ---------- lazygit (per user, Linux) ----------
-  # The lookup may have failed (network blip, or curl was installed only just now): try again
-  if [ "$NEED_LG" = 1 ] && [ -z "$LG_LATEST" ]; then LG_LATEST="$(gh_latest jesseduffield/lazygit)"; fi
-  if [ "$NEED_LG" = 1 ]; then
-    if [ -z "$LG_LATEST" ]; then
-      step "Installing lazygit"
-      failed "lazygit (could not look up the latest release)"
-    else
-      step "Installing lazygit $LG_LATEST in ~/.local/bin"
-      case "$ARCH" in amd64) a=x86_64 ;; arm64) a=arm64 ;; esac
-      if fetch_once "https://github.com/jesseduffield/lazygit/releases/download/$LG_LATEST/lazygit_${LG_LATEST#v}_Linux_$a.tar.gz" "$TMP/lazygit.tgz" \
-         && tar -C "$TMP" -xzf "$TMP/lazygit.tgz" lazygit && mv -f "$TMP/lazygit" "$LOCAL_BIN/lazygit"; then
-        if [ -n "$LG_CUR" ]; then did "lazygit $LG_LATEST (was $LG_CUR)"; else did "lazygit $LG_LATEST"; fi
-      else
-        failed "lazygit"
-      fi
-    fi
-  fi
-
-}
-job_gh() {
-  # ---------- GitHub CLI (per user, Linux) ----------
-  if [ -z "$GH_LATEST" ]; then GH_LATEST="$(gh_latest cli/cli)"; fi
-  if [ -z "$GH_LATEST" ]; then
-    step "Installing the GitHub CLI"
-    failed "GitHub CLI (could not look up the latest release)"
+# release_bin LABEL REPO LATEST CUR URL MEMBER [NOTE]: one program from a GitHub release tarball
+# into ~/.local/bin. In URL and MEMBER, @TAG@ is the release tag (v1.2.3) and @VER@ the version
+# (1.2.3). LATEST empty: looked up again (network blip, or curl was installed only just now).
+release_bin() {
+  local label="$1" repo="$2" latest="$3" cur="$4" url="$5" member="$6" note="${7:-}" d
+  [ -n "$latest" ] || latest="$(gh_latest "$repo")"
+  if [ -z "$latest" ]; then
+    step "Installing $label"
+    failed "$label (could not look up the latest release)"
     return 0
   fi
-  step "Installing the GitHub CLI $GH_LATEST in ~/.local/bin"
-  local v="${GH_LATEST#v}" d="gh_${GH_LATEST#v}_linux_$ARCH"
-  if fetch_once "https://github.com/cli/cli/releases/download/$GH_LATEST/$d.tar.gz" "$TMP/gh.tgz" \
-     && tar -C "$TMP" -xzf "$TMP/gh.tgz" "$d/bin/gh" && mv -f "$TMP/$d/bin/gh" "$LOCAL_BIN/gh"; then
-    if [ -n "$GH_CUR" ]; then did "GitHub CLI $GH_LATEST (was $GH_CUR)"; else did "GitHub CLI $GH_LATEST"; fi  # signing in: offered at the end, else under Next
+  step "Installing $label $latest in ~/.local/bin"
+  url="${url//@TAG@/$latest}"; url="${url//@VER@/${latest#v}}"; member="${member//@VER@/${latest#v}}"
+  d="$TMP/release-${member##*/}"; rm -rf "$d"; mkdir -p "$d"
+  if fetch_once "$url" "$d.tgz" && tar -C "$d" -xzf "$d.tgz" "$member" && mv -f "$d/$member" "$LOCAL_BIN/${member##*/}"; then
+    if [ -n "$cur" ]; then did "$label $latest (was $cur)"; else did "$label $latest${note:+ ($note)}"; fi
   else
-    failed "GitHub CLI ($v)"
+    failed "$label ($latest)"
   fi
+}
+job_lazygit() {
+  local a="$ARCH"; [ "$ARCH" = amd64 ] && a=x86_64
+  release_bin lazygit jesseduffield/lazygit "$LG_LATEST" "$LG_CUR" \
+    "https://github.com/jesseduffield/lazygit/releases/download/@TAG@/lazygit_@VER@_Linux_$a.tar.gz" lazygit
+}
+job_gh() { # signing in: offered at the end, else under Next
+  release_bin "GitHub CLI" cli/cli "$GH_LATEST" "$GH_CUR" \
+    "https://github.com/cli/cli/releases/download/@TAG@/gh_@VER@_linux_$ARCH.tar.gz" "gh_@VER@_linux_$ARCH/bin/gh"
 }
 job_fzf() {
-  # ---------- fzf (per user, Linux) ----------
-  if [ -z "$FZF_LATEST" ]; then FZF_LATEST="$(gh_latest junegunn/fzf)"; fi
-  if [ -z "$FZF_LATEST" ]; then
-    step "Installing fzf"
-    failed "fzf (could not look up the latest release)"
-    return 0
-  fi
-  step "Installing fzf $FZF_LATEST in ~/.local/bin"
-  mkdir -p "$TMP/fzf"
-  if fetch_once "https://github.com/junegunn/fzf/releases/download/$FZF_LATEST/fzf-${FZF_LATEST#v}-linux_$ARCH.tar.gz" "$TMP/fzf.tgz" \
-     && tar -C "$TMP/fzf" -xzf "$TMP/fzf.tgz" fzf && mv -f "$TMP/fzf/fzf" "$LOCAL_BIN/fzf"; then
-    if [ -n "$FZF_CUR" ]; then did "fzf $FZF_LATEST (was $FZF_CUR)"; else did "fzf $FZF_LATEST (new shells: Ctrl-R history, Ctrl-T files, Alt-C cd)"; fi
-  else
-    failed "fzf"
-  fi
+  release_bin fzf junegunn/fzf "$FZF_LATEST" "$FZF_CUR" \
+    "https://github.com/junegunn/fzf/releases/download/@TAG@/fzf-@VER@-linux_$ARCH.tar.gz" fzf \
+    "new shells: Ctrl-R history, Ctrl-T files, Alt-C cd"
 }
 job_uv() {
   # ---------- uv and Python (per user) ----------
@@ -1867,7 +1851,8 @@ job_uv() {
   uv_installer() {
     local url=https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh
     [ -n "$UV_LATEST" ] && url="https://github.com/astral-sh/uv/releases/download/$UV_LATEST/uv-installer.sh"
-    fetch "$url" "$TMP/uv-installer.sh" &&
+    # in a subshell: fetch dies after its retries, which would end the whole job here
+    ( fetch "$url" "$TMP/uv-installer.sh" ) &&
       env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$LOCAL_BIN" sh "$TMP/uv-installer.sh" --quiet && [ -x "$LOCAL_BIN/uv" ]
   }
   uv_now() { "$LOCAL_BIN/uv" --version 2>/dev/null | awk '{print $2}'; }
@@ -1881,7 +1866,7 @@ job_uv() {
       note "uv self update stayed at $(uv_now); using the $UV_LATEST installer"
       uv_installer || true
     fi
-    v="$(uv_now)"
+    v="$(uv_now || true)"
     if [ -z "$v" ]; then failed "uv update (uv no longer runs)"
     elif [ "$v" = "$UV_CUR" ]; then failed "uv update: still $v${UV_LATEST:+, wanted $UV_LATEST}"
     else did "uv $v (was $UV_CUR)"; fi
@@ -1987,7 +1972,8 @@ job_claude() {
       fetch https://claude.ai/install.sh "$TMP/claude-install.sh"
       bash "$TMP/claude-install.sh"
       . "$STATE_DIR/env.sh"; hash -r
-      has claude && did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}')"
+      if has claude; then did "Claude Code $(claude --version 2>/dev/null | awk '{print $1}')"
+      else failed "Claude Code (its installer ran, but claude is not on PATH; see the log)"; fi
     fi
 }
 job_mason() {
@@ -1998,7 +1984,7 @@ job_mason() {
   if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install('mason')" \
        -c "cquit 1" </dev/null 2>&1 | tee "$TMP/headless.log" \
        | { grep --line-buffered -E 'mason: |^!!' || true; }; then
-    [ "$NEED_LAZY" = 1 ] && did "nvim plugins, LSP servers, formatters and parsers (latest)"
+    [ "$NEED_LAZY" = 1 ] && did "nvim plugins, LSP servers and formatters (latest)"
     # "  mason: updating NAME A -> B" / "  mason: installing NAME V" lines from headless.lua
     sed -n 's/^ *mason: updating \(.*\)/Mason \1/p; s/^ *mason: installing \(.*\)/Mason \1 (new)/p' "$TMP/headless.log" \
       | tr -d '\r' > "$TMP/mason.done"
@@ -2033,7 +2019,7 @@ job_parsers() {
         "$HOME/.cargo/bin/rustup" update stable --no-self-update >/dev/null 2>&1 || true
         CARGO="$HOME/.cargo/bin/cargo"
       elif has cargo; then
-        m="$(cargo --version 2>/dev/null | sed -n 's/^cargo 1\.\([0-9]*\).*/\1/p')"
+        m="$(cargo --version 2>/dev/null | sed -n 's/^cargo 1\.\([0-9]*\).*/\1/p' || true)"
         [ "${m:-0}" -ge 85 ] && CARGO="$(command -v cargo)"
       fi
       if [ -z "$CARGO" ]; then
@@ -2217,7 +2203,7 @@ job_claude_plugins() {
       curl -fsS -m 15 -H "Content-Type: application/json" ${NTFY_TOKEN:+-H "Authorization: Bearer $NTFY_TOKEN"} \
         -d "{\"topic\":\"$NTFY_TOPIC\",\"title\":\"dotfiles\",\"message\":\"ntfy works on $(hostname | cut -d. -f1)\",\"tags\":[\"tada\"]}" \
         "${NTFY_URL%/}" >/dev/null ) && note "ntfy: test message sent to $(sed -n 's/^NTFY_TOPIC=//p' "$NTFY_CONF")" \
-      || failed "ntfy test message (check NTFY_URL / NTFY_TOPIC / NTFY_TOKEN in ${NTFY_CONF/#$HOME/~})"
+      || failed "ntfy test message (check NTFY_URL / NTFY_TOPIC / NTFY_TOKEN in ${NTFY_CONF/#$HOME/\~})"
   fi
   if [ "$NEED_GIT_HOOK" = 1 ]; then
     if gitg config --global core.hooksPath "$GIT_HOOKS"; then did "git commit-msg hook (core.hooksPath $GIT_HOOKS)"
@@ -2239,7 +2225,7 @@ job_claude_plugins() {
           esac ;;
       esac
     done
-  else
+  elif [ "$NEED_CLAUDE" != 1 ]; then # after an install job_claude has reported the failure already
     failed "Claude Code (see https://code.claude.com/docs/en/troubleshoot-install)"
   fi
 }

@@ -34,7 +34,7 @@ for p in "$@"; do
       check "plugin $p" $r ;;
   esac
 done
-# Claude is not added as a co-author: attribution.commit and attribution.pr are ""
+# Claude is not added as a co-author: attribution.commit and attribution.pr are "", sessionUrl is false
 node -e 'const s = require(process.env.HOME + "/.claude/settings.json");
   const a = s.attribution || {};
   process.exit(a.commit === "" && a.pr === "" && a.sessionUrl === false ? 0 : 1)'
