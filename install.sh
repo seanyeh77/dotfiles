@@ -44,6 +44,8 @@ DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/seanyeh77/dotfiles}"
 # (~/.config/nvim, ~/.tmux.conf.local, ...) from a temporary clone that is deleted at the end.
 # DOTFILES_DIR=PATH installs from that checkout instead (it is kept), e.g. to try local changes.
 DOTFILES_DIR="${DOTFILES_DIR:-}"
+# its real path: "." or "~/dotfiles/" must still match ~/dotfiles below (which is otherwise removed)
+if [ -n "$DOTFILES_DIR" ]; then DOTFILES_DIR="$(cd "$DOTFILES_DIR" 2>/dev/null && pwd -P || echo "$DOTFILES_DIR")"; fi
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 STATE_DIR="$CONFIG_HOME/dotfiles"   # env.sh, git hooks, installed version, saved answers
 OLD_DOTFILES="$HOME/dotfiles"       # where older versions of this installer kept the repo
@@ -397,7 +399,8 @@ PLUGINS_ADDED_LATER="modern-web-guidance"
 
 # Docker: a system install, so only offered with root, sudo or Homebrew. On Linux you are also
 # added to the docker group, so docker runs without sudo (that group is as powerful as root).
-in_docker_group() { id -nG 2>/dev/null | tr ' ' '\n' | grep -x docker >/dev/null; }
+# the group database (id -nG USER), not this process: a group added earlier counts before a new login
+in_docker_group() { id -nG "$(id -un)" 2>/dev/null | tr ' ' '\n' | grep -x docker >/dev/null; }
 DOCKER_TODO="" # install | group | empty: what Docker would need here
 if [ "$IS_TERMUX" = 1 ]; then :            # Android: no kernel support for containers
 elif ! has docker; then DOCKER_TODO=install
@@ -1115,7 +1118,8 @@ DF_CUR="${DF_CUR:0:7}"; DF_LATEST="${DF_LATEST:0:7}"
 NEED_DOTFILES=0; outdated "$DF_CUR" "$DF_LATEST" && NEED_DOTFILES=1
 # The ~/dotfiles clone of older installs: removed once nothing uses it, unless it has changes of yours
 RM_OLD=0
-if [ "$DOTFILES_DIR" != "$OLD_DOTFILES" ] && [ -d "$OLD_DOTFILES/.git" ] && has git; then
+if [ "$DOTFILES_DIR" != "$(cd "$OLD_DOTFILES" 2>/dev/null && pwd -P || echo "$OLD_DOTFILES")" ] \
+   && [ -d "$OLD_DOTFILES/.git" ] && has git; then
   og() { git -c safe.directory="$OLD_DOTFILES" -C "$OLD_DOTFILES" "$@"; }
   case "$(og remote get-url origin 2>/dev/null || true)" in
     *seanyeh77/dotfiles*|"$DOTFILES_REPO"*)
@@ -2094,6 +2098,8 @@ job_parsers() {
       v="v$("$LOCAL_BIN/tree-sitter" --version | awk '{print $2}')"
       if [ -n "$TS_CUR" ]; then did "tree-sitter CLI $v (was $TS_CUR)"; else did "tree-sitter CLI $v"; fi
     else failed "tree-sitter CLI"; fi
+  elif [ "$NEED_TS" = 1 ]; then
+    failed "tree-sitter CLI (needs Node.js / npm)"
   fi
   hash -r
   if ! has tree-sitter || ! ts_works tree-sitter; then
@@ -2191,7 +2197,9 @@ job_claude_plugins() {
   if [ "$NEED_CLAUDE_ATTR" = 1 ] || [ "$NEED_CLAUDE_PUSH" = 1 ] || [ "$NEED_NTFY_HOOK" = 1 ] || [ "$PM" = apk ]; then
     mkdir -p "$HOME/.claude"
     NTFY_CMD=""; [ "$NEED_NTFY_HOOK" = 1 ] && [ "$CLAUDE_NTFY" = 1 ] && NTFY_CMD="\"$(command -v node || echo node)\" \"$NTFY_HOOK\""
-    if CLAUDE_SETTINGS="$CLAUDE_SETTINGS" PUSH="$NEED_CLAUDE_PUSH" NTFY="$([ "$NEED_NTFY_HOOK" = 1 ] && echo "$CLAUDE_NTFY")" \
+    if ! has node; then
+      failed "Claude settings (needs Node.js)"
+    elif CLAUDE_SETTINGS="$CLAUDE_SETTINGS" PUSH="$NEED_CLAUDE_PUSH" NTFY="$([ "$NEED_NTFY_HOOK" = 1 ] && echo "$CLAUDE_NTFY")" \
        NTFY_CMD="$NTFY_CMD" MUSL="$([ "$PM" = apk ] && echo 1 || echo 0)" node -e '
       const fs = require("fs"), f = process.env.CLAUDE_SETTINGS;
       let s = {};
