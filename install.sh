@@ -360,7 +360,7 @@ SUDO_OK=0
 if [ "$(id -u)" -eq 0 ] || [ "$IS_TERMUX" = 1 ]; then
   sudo() { "$@"; }; SUDO_OK=1 # root, or Termux where packages belong to the user
 elif [ "$PM" = brew ]; then
-  SUDO_OK=1 # Homebrew does not use sudo
+  SUDO_OK=1 # Homebrew does not use sudo (the ~/.npm and old-link fixes do: not with NO_SUDO=1)
 elif [ "${NO_SUDO:-0}" != 1 ] && has sudo; then
   if sudo -n true 2>/dev/null; then
     SUDO_OK=1 # sudo without a password (NOPASSWD, or a cached sudo)
@@ -1408,7 +1408,12 @@ SYS_WHO="for every user"; [ "$IS_TERMUX" = 1 ] && SYS_WHO="Termux's packages"
 case "$SUDO_OK" in
   0) SYS_HOW="no sudo here: not changed, ask an admin" ;;
   1) if [ "$IS_TERMUX" = 1 ]; then SYS_HOW="no sudo needed"
-     elif [ "$PM" = brew ]; then SYS_HOW="Homebrew"; [ "$NPM_FIX" = 1 ] && SYS_HOW="Homebrew; sudo for ~/.npm"
+     elif [ "$PM" = brew ]; then
+       SYS_HOW="Homebrew"
+       if [ "$NPM_FIX" = 1 ] || [ "$OLD_TS_LINK" = 1 ]; then
+         if [ "${NO_SUDO:-0}" = 1 ]; then SYS_HOW="Homebrew; ~/.npm and old links not changed (NO_SUDO=1)"
+         else SYS_HOW="Homebrew; sudo, asks for your password, for ~/.npm and old links"; fi
+       fi
      elif [ "$(id -u)" -eq 0 ]; then SYS_HOW="as root"
      else SYS_HOW="sudo"; fi ;;
   *) SYS_HOW="sudo, asks for your password" ;;
@@ -1594,14 +1599,14 @@ fi
 
 if [ "$NPM_FIX" = 1 ]; then
   step "Giving ~/.npm back to you"
-  if [ "$SUDO_OK" = 1 ] && on_screen sudo chown -R "$(id -u):$(id -g)" "$HOME/.npm"; then
+  if [ "$SUDO_OK" = 1 ] && [ "${NO_SUDO:-0}" != 1 ] && on_screen sudo chown -R "$(id -u):$(id -g)" "$HOME/.npm"; then
     sys_did "~/.npm belongs to you again (npm and Mason can write to it)"
   else
     failed "npm cache ~/.npm is owned by root, so npm-based LSP servers fail (run: sudo chown -R $(id -un) ~/.npm)"
   fi
 fi
-if [ "$OLD_TS_LINK" = 1 ] && [ "$SUDO_OK" = 1 ]; then
-  sudo rm -f /usr/local/bin/tree-sitter && sys_did "removed old link /usr/local/bin/tree-sitter"
+if [ "$OLD_TS_LINK" = 1 ] && [ "$SUDO_OK" = 1 ] && [ "${NO_SUDO:-0}" != 1 ]; then
+  on_screen sudo rm -f /usr/local/bin/tree-sitter && sys_did "removed old link /usr/local/bin/tree-sitter"
 fi
 
 # Debian/Ubuntu ship fd as fdfind
