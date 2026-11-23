@@ -1403,18 +1403,24 @@ plan_rows() {
     printf '    %s %-*s  %s%s%*s%s  %s%s%s\n' "${SY[$i]}" "$wn" "${NA[$i]}" "$B" "${VE[$i]}" $((wv - ${#VE[$i]})) "" "$N" "$D" "$rest" "$N" >&3
   done
 }
+# Who makes the system changes, for the plan's System header (terminal and plain output)
+SYS_WHO="for every user"; [ "$IS_TERMUX" = 1 ] && SYS_WHO="Termux's packages"
+case "$SUDO_OK" in
+  0) SYS_HOW="no sudo here: not changed, ask an admin" ;;
+  1) if [ "$IS_TERMUX" = 1 ]; then SYS_HOW="no sudo needed"
+     elif [ "$PM" = brew ]; then SYS_HOW="Homebrew"; [ "$NPM_FIX" = 1 ] && SYS_HOW="Homebrew; sudo for ~/.npm"
+     elif [ "$(id -u)" -eq 0 ]; then SYS_HOW="as root"
+     else SYS_HOW="sudo"; fi ;;
+  *) SYS_HOW="sudo, asks for your password" ;;
+esac
 if [ ${#SYS_PLAN[@]} -eq 0 ] && [ ${#USER_PLAN[@]} -eq 0 ]; then
   if [ "$UI" = 1 ]; then printf '\n  %s%s%s Everything is installed and up to date %s(the config files are still synced)%s\n\n' "$G" "$S_OK" "$N" "$D" "$N" >&3
   else log "Everything is installed and up to date"; fi
 elif [ "$UI" = 1 ]; then
   printf '\n' >&3
   if [ ${#SYS_PLAN[@]} -gt 0 ]; then
-    case "$SUDO_OK" in
-      0) h="${R}no sudo here: not changed, ask an admin${N}" ;;
-      1) if [ "$PM" = brew ]; then h="Homebrew"; elif [ "$(id -u)" -eq 0 ]; then h="as root"; else h="sudo"; fi ;;
-      2) h="sudo, asks for your password" ;;
-    esac
-    printf '  %sSystem%s %s%s for every user, %s%s\n' "$B" "$N" "$D" "$S_DOT" "$h" "$N" >&3
+    h="$SYS_HOW"; [ "$SUDO_OK" = 0 ] && h="$R$h$N"
+    printf '  %sSystem%s %s%s %s, %s%s\n' "$B" "$N" "$D" "$S_DOT" "$SYS_WHO" "$h" "$N" >&3
     plan_rows "${SYS_PLAN[@]}"
   fi
   if [ ${#USER_PLAN[@]} -gt 0 ]; then
@@ -1426,13 +1432,7 @@ else
   # plain output (CI, a pipe): one block, the same format as always
   log "To install or update:"
   if [ ${#SYS_PLAN[@]} -gt 0 ]; then
-    case "$SUDO_OK" in
-      0) echo "   System, for every user (no sudo: NOT changed, ask an admin):" ;;
-      1) if [ "$PM" = brew ]; then echo "   System, for every user (Homebrew):"
-         elif [ "$(id -u)" -eq 0 ]; then echo "   System, for every user (as root):"
-         else echo "   System, for every user (sudo):"; fi ;;
-      2) echo "   System, for every user (sudo, asks for your password):" ;;
-    esac
+    echo "   System, $SYS_WHO ($SYS_HOW):"
     print_rows "${SYS_PLAN[@]}"
   fi
   if [ ${#USER_PLAN[@]} -gt 0 ]; then
@@ -2048,7 +2048,7 @@ job_mason() {
   # install() itself failed to quit (e.g. a Lua error), so nvim never hangs.
   if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install('mason')" \
        -c "cquit 1" </dev/null 2>&1 | tee "$TMP/headless.log" \
-       | { grep --line-buffered -E 'mason: |^!!' || true; }; then
+       | awk '/mason: |^!!/ { print; fflush() }'; then # (BusyBox grep has no --line-buffered)
     [ "$NEED_LAZY" = 1 ] && did "nvim plugins, LSP servers and formatters (latest)"
     # "  mason: updating NAME A -> B" / "  mason: installing NAME V" lines from headless.lua
     sed -n 's/^ *mason: updating \(.*\)/Mason \1/p; s/^ *mason: installing \(.*\)/Mason \1 (new)/p' "$TMP/headless.log" \
@@ -2150,7 +2150,7 @@ job_parsers() {
   export CFLAGS="${CFLAGS:--O2}"
   if with_timeout 1500 env DOTFILES_HEADLESS_INSTALL=1 nvim --headless -c "lua require('dotfiles.headless').install('parsers')" \
        -c "cquit 1" </dev/null 2>&1 | tee "$TMP/parsers.log" \
-       | { grep --line-buffered -E 'treesitter round|^!!' || true; }; then
+       | awk '/treesitter round|^!!/ { print; fflush() }'; then
     :
   else
     failed "some treesitter parsers (open nvim and run :checkhealth nvim-treesitter)"
@@ -2446,7 +2446,7 @@ NEXT+=("Open a new shell, then run nvim or tmux (:checkhealth and :Mason show th
 NEXT+=(${TERM_NEXT[@]+"${TERM_NEXT[@]}"})
 [ "${DOCKER_RELOGIN:-0}" = 1 ] && NEXT+=("Docker: log out and back in (or run: newgrp docker), then docker runs without sudo")
 [ "${DOCKER_NO_SERVICE:-0}" = 1 ] && NEXT+=("Docker: no systemd here, so the daemon was not started (run: sudo dockerd &)")
-[ "$NEED_DOCKER" = 1 ] && [ "$PM" = brew ] && NEXT+=("Docker: open Docker Desktop once (Applications) to finish its setup")
+[ "${docker_ok:-0}" = 1 ] && [ "$PM" = brew ] && NEXT+=("Docker: open Docker Desktop once (Applications) to finish its setup")
 if [ "$INSTALL_CLAUDE" = 1 ] && has claude; then
   [ "$NEED_CLAUDE" = 1 ] && [ -z "$CLAUDE_CUR" ] && NEXT+=("Run claude (or tmux prefix + A) and log in")
   # MCP servers (plugin tools, claude.ai connectors) that still need a sign-in. `claude mcp list`

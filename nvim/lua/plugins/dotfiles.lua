@@ -18,7 +18,7 @@ return {
 
   -- Python: on save (and Space c f), Ruff first applies its safe lint fixes (unused imports, old
   -- syntax it can rewrite without changing behaviour, ...), then formats. Fixes Ruff marks unsafe
-  -- (removing an unused variable, % strings to f-strings) stay manual: Space c A, "Fix all", or
+  -- (removing an unused variable, % strings to f-strings) stay manual: Space c a on the line (Ruff's quick fix), or
   -- `ruff check --fix --unsafe-fixes .`. Space u f turns formatting on save off for the buffer.
   {
     "stevearc/conform.nvim",
