@@ -416,8 +416,11 @@ tmux_conf_urlscan_options="--compact --dedupe"
 # with OSC 52; tmux passes it on to iTerm2 / Ghostty / WezTerm / kitty
 set -s set-clipboard on
 
-# Let images through to the terminal (kitty graphics protocol: nvim image previews in Ghostty)
+# Let images through to the terminal (kitty graphics protocol: nvim image previews in Ghostty).
+# The option exists from tmux 3.3 (older ones let it through anyway, and would print an error)
+%if #{>=:#{version},3.3}
 set -g allow-passthrough on
+%endif
 
 # replace C-b by C-a instead of using both prefixes
 # set -gu prefix2

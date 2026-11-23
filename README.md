@@ -151,7 +151,7 @@ Leave it off for servers whose firewall you cannot change (school or competition
 
 ## Shell
 
-`~/.config/dotfiles/env.sh` (from `shell/env.sh`) is loaded from `~/.bashrc` and `~/.zshrc`, and from the bash login file (`~/.bash_profile`, `~/.bash_login` or `~/.profile`) when that one does not read `~/.bashrc`, as on some school and lab servers; with none of them, a `~/.bash_profile` that reads `~/.bashrc` is created. It puts `~/.local/bin` and Mason's tools on `PATH`, loads Ghostty's shell integration, and adds:
+`~/.config/dotfiles/env.sh` (from `shell/env.sh`) is loaded from `~/.bashrc` and `~/.zshrc`, and from the bash login file (`~/.bash_profile`, `~/.bash_login` or `~/.profile`) when that one does not read `~/.bashrc`, as on some school and lab servers; with none of them, a `~/.bash_profile` that reads `~/.bashrc` is created. It puts `~/.local/bin` and Mason's tools on `PATH`, loads Ghostty's shell integration in zsh (when Ghostty did not inject it), and adds:
 
 | Command | Action |
 | --- | --- |
