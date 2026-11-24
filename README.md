@@ -32,7 +32,7 @@ No copy of this repo stays behind: the files are copied into place (`~/.config/n
 - **Updates** (macOS): an older Ghostty or iTerm2 is updated to the release its own updater offers. One that is open (e.g. the one running the installer) is left alone, and the summary says to use its menu, *Check for Updates*.
 - **`ip`** (macOS): [iproute2mac](https://github.com/brona/iproute2mac) from Homebrew, so `ip a`, `ip route` and `ip neigh` work as on Linux (common subcommands only; it runs `ifconfig`, `route` and `netstat` underneath).
 - **Font**: JetBrainsMono Nerd Font is installed on macOS and on a Linux desktop. Servers you ssh into need none: your own terminal draws the text. Elsewhere, pick a [Nerd Font](https://www.nerdfonts.com) in your terminal, or icons show as boxes.
-- **Over SSH**: copying in nvim and tmux reaches your local clipboard (OSC 52), and Ghostty presents itself as `xterm-256color`, so servers need no setup.
+- **Over SSH**: copying in nvim and tmux reaches your local clipboard (OSC 52), and Ghostty presents itself as `xterm-256color`, so servers need no setup. Locally, Ghostty's `sudo` shell integration keeps its terminfo for commands run with sudo (`sudo mtr`, `sudo htop`).
 
 ## Claude Code
 
